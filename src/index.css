@@ -1,9 +1,60 @@
 @import "tailwindcss";
 
+/*
+ * Type system for the ops console (see components/ui.ts for the shared class
+ * strings that build on these):
+ *   - Archivo        display face, signage character - headings + big numerals
+ *   - Public Sans    body / UI - overrides Tailwind's --font-sans
+ *   - IBM Plex Mono  bay codes, plate numbers, timestamps, eyebrow labels
+ */
+@theme {
+  --font-sans: "Public Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: "Archivo", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+
 :root {
   color-scheme: light;
 }
 
 body {
-  @apply bg-slate-100 text-slate-900 antialiased;
+  @apply bg-slate-50 text-slate-900 antialiased;
+  font-synthesis-weight: none;
+}
+
+/* The drafting-dot canvas the floor map sits on - reads as a parking-deck plan. */
+.deck-grid {
+  background-color: #f8fafc;
+  background-image: radial-gradient(circle, rgb(203 213 225 / 0.55) 1px, transparent 1px);
+  background-size: 22px 22px;
+  background-position: -1px -1px;
+}
+
+/* Painted-bay-line motif behind the sign-in screen. */
+.bay-field {
+  background-color: #1e3a8a;
+  background-image:
+    repeating-linear-gradient(
+      115deg,
+      transparent 0 46px,
+      rgb(255 255 255 / 0.05) 46px 50px
+    ),
+    linear-gradient(180deg, #1e3a8a 0%, #0f172a 100%);
+}
+
+/* Perforated top edge of the check-in ticket panel. */
+.ticket-perf {
+  --perf: #f8fafc;
+  background:
+    radial-gradient(circle at 6px 6px, transparent 5px, var(--perf) 5.5px) 0 0 / 16px 12px repeat-x;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
 }

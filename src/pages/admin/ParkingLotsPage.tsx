@@ -2,6 +2,9 @@ import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { createParkingLot, listParkingLots } from '../../api/parkingLots'
+import { PageShell } from '../../components/Layout'
+import { Card, Eyebrow, FieldLabel } from '../../components/ui'
+import { btn, field } from '../../components/styles'
 import type { ParkingLot } from '../../types'
 
 export function ParkingLotsPage() {
@@ -30,51 +33,51 @@ export function ParkingLotsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-3xl p-6">
-      <h1 className="mb-4 text-xl font-semibold text-slate-900">Parking lots</h1>
+    <PageShell
+      eyebrow="Configure"
+      title="Parking lots"
+      intro="Each lot holds one or more floors. Add a lot here, then open it to lay out floors, bays and rate plans."
+    >
+      <Card>
+        <ul className="divide-y divide-slate-100">
+          {lots.map((lot) => (
+            <li key={lot.id} className="flex items-center justify-between gap-4 px-4 py-3.5">
+              <div className="min-w-0">
+                <p className="truncate font-medium text-slate-900">{lot.name}</p>
+                {lot.address && <p className="truncate text-sm text-slate-500">{lot.address}</p>}
+              </div>
+              <Link
+                to={`/admin/parking-lots/${lot.id}`}
+                className="shrink-0 text-sm font-semibold text-blue-600 hover:text-blue-700"
+              >
+                Manage floors →
+              </Link>
+            </li>
+          ))}
+          {lots.length === 0 && (
+            <li className="px-4 py-8 text-center text-sm text-slate-400">
+              No parking lots yet. Add the first one below.
+            </li>
+          )}
+        </ul>
+      </Card>
 
-      <ul className="mb-6 divide-y divide-slate-200 rounded border border-slate-200 bg-white">
-        {lots.map((lot) => (
-          <li key={lot.id} className="flex items-center justify-between px-4 py-3">
-            <div>
-              <p className="font-medium text-slate-900">{lot.name}</p>
-              {lot.address && <p className="text-sm text-slate-500">{lot.address}</p>}
-            </div>
-            <Link to={`/admin/parking-lots/${lot.id}`} className="text-sm text-blue-600 hover:underline">
-              Manage floors
-            </Link>
-          </li>
-        ))}
-        {lots.length === 0 && <li className="px-4 py-3 text-sm text-slate-500">No parking lots yet.</li>}
-      </ul>
-
-      <form onSubmit={handleCreate} className="rounded border border-slate-200 bg-white p-4">
-        <h2 className="mb-3 text-sm font-semibold text-slate-700">New parking lot</h2>
-        <div className="mb-3">
-          <label className="mb-1 block text-sm text-slate-600">Name</label>
-          <input
-            required
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            className="w-full rounded border border-slate-300 px-3 py-2 text-sm"
-          />
-        </div>
-        <div className="mb-3">
-          <label className="mb-1 block text-sm text-slate-600">Address</label>
-          <input
-            value={address}
-            onChange={(e) => setAddress(e.target.value)}
-            className="w-full rounded border border-slate-300 px-3 py-2 text-sm"
-          />
-        </div>
-        <button
-          type="submit"
-          disabled={submitting}
-          className="rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
-        >
-          Create
-        </button>
-      </form>
-    </div>
+      <Card className="p-5">
+        <Eyebrow className="mb-4">New parking lot</Eyebrow>
+        <form onSubmit={handleCreate} className="space-y-4">
+          <div>
+            <FieldLabel>Name</FieldLabel>
+            <input required value={name} onChange={(e) => setName(e.target.value)} className={field} />
+          </div>
+          <div>
+            <FieldLabel>Address</FieldLabel>
+            <input value={address} onChange={(e) => setAddress(e.target.value)} className={field} />
+          </div>
+          <button type="submit" disabled={submitting} className={btn.primary}>
+            Create lot
+          </button>
+        </form>
+      </Card>
+    </PageShell>
   )
 }

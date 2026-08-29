@@ -1,7 +1,12 @@
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { createUser, listUsers } from '../../api/users'
+import { PageShell } from '../../components/Layout'
+import { Card, Eyebrow, FieldLabel } from '../../components/ui'
+import { btn, field } from '../../components/styles'
 import type { AppUser, Role } from '../../types'
+
+const ROLE_LABEL: Record<Role, string> = { ADMIN: 'Administrator', USER: 'Attendant' }
 
 export function UsersPage() {
   const [users, setUsers] = useState<AppUser[]>([])
@@ -30,87 +35,82 @@ export function UsersPage() {
       setRole('USER')
       reload()
     } catch {
-      setError('Could not create that account - check the email is not already in use')
+      setError('Could not create that account. Check the email isn’t already in use.')
     } finally {
       setSubmitting(false)
     }
   }
 
   return (
-    <div className="mx-auto max-w-3xl p-6">
-      <h1 className="mb-4 text-xl font-semibold text-slate-900">Staff accounts</h1>
-      <p className="mb-4 text-sm text-slate-500">
-        USER accounts are facility workers who can check any vehicle in the system in or out. ADMIN
-        accounts configure lots, floors and pricing.
-      </p>
+    <PageShell
+      eyebrow="Configure"
+      title="Staff accounts"
+      intro="Attendants check vehicles in and out. Administrators also configure lots, floors and pricing. There is no self sign-up — every account is created here."
+    >
+      <Card>
+        <ul className="divide-y divide-slate-100">
+          {users.map((u) => (
+            <li key={u.id} className="flex items-center justify-between gap-4 px-4 py-3.5">
+              <div className="min-w-0">
+                <p className="truncate font-medium text-slate-900">{u.name}</p>
+                <p className="truncate text-sm text-slate-500">{u.email}</p>
+              </div>
+              <span
+                className={`shrink-0 rounded-full px-2.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-[0.14em] ${
+                  u.role === 'ADMIN' ? 'bg-blue-50 text-blue-700' : 'bg-slate-100 text-slate-600'
+                }`}
+              >
+                {ROLE_LABEL[u.role]}
+              </span>
+            </li>
+          ))}
+          {users.length === 0 && (
+            <li className="px-4 py-8 text-center text-sm text-slate-400">No accounts yet.</li>
+          )}
+        </ul>
+      </Card>
 
-      <ul className="mb-6 divide-y divide-slate-200 rounded border border-slate-200 bg-white">
-        {users.map((u) => (
-          <li key={u.id} className="flex items-center justify-between px-4 py-3">
-            <div>
-              <p className="font-medium text-slate-900">{u.name}</p>
-              <p className="text-sm text-slate-500">{u.email}</p>
-            </div>
-            <span className="rounded bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600">
-              {u.role}
-            </span>
-          </li>
-        ))}
-        {users.length === 0 && <li className="px-4 py-3 text-sm text-slate-500">No accounts yet.</li>}
-      </ul>
-
-      <form onSubmit={handleCreate} className="rounded border border-slate-200 bg-white p-4">
-        <h2 className="mb-3 text-sm font-semibold text-slate-700">New account</h2>
-        <div className="mb-3">
-          <label className="mb-1 block text-sm text-slate-600">Name</label>
-          <input
-            required
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            className="w-full rounded border border-slate-300 px-3 py-2 text-sm"
-          />
-        </div>
-        <div className="mb-3">
-          <label className="mb-1 block text-sm text-slate-600">Email</label>
-          <input
-            type="email"
-            required
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            className="w-full rounded border border-slate-300 px-3 py-2 text-sm"
-          />
-        </div>
-        <div className="mb-3">
-          <label className="mb-1 block text-sm text-slate-600">Temporary password</label>
-          <input
-            type="password"
-            required
-            minLength={8}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className="w-full rounded border border-slate-300 px-3 py-2 text-sm"
-          />
-        </div>
-        <div className="mb-3">
-          <label className="mb-1 block text-sm text-slate-600">Role</label>
-          <select
-            value={role}
-            onChange={(e) => setRole(e.target.value as Role)}
-            className="w-full rounded border border-slate-300 px-3 py-2 text-sm"
-          >
-            <option value="USER">USER (facility worker)</option>
-            <option value="ADMIN">ADMIN</option>
-          </select>
-        </div>
-        {error && <p className="mb-3 text-sm text-red-600">{error}</p>}
-        <button
-          type="submit"
-          disabled={submitting}
-          className="rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
-        >
-          Create account
-        </button>
-      </form>
-    </div>
+      <Card className="p-5">
+        <Eyebrow className="mb-4">New account</Eyebrow>
+        <form onSubmit={handleCreate} className="space-y-4">
+          <div>
+            <FieldLabel>Name</FieldLabel>
+            <input required value={name} onChange={(e) => setName(e.target.value)} className={field} />
+          </div>
+          <div>
+            <FieldLabel>Email</FieldLabel>
+            <input
+              type="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className={field}
+            />
+          </div>
+          <div>
+            <FieldLabel>Temporary password</FieldLabel>
+            <input
+              type="password"
+              required
+              minLength={8}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className={field}
+            />
+          </div>
+          <div>
+            <FieldLabel>Role</FieldLabel>
+            <select value={role} onChange={(e) => setRole(e.target.value as Role)} className={field}>
+              <option value="USER">Attendant — checks vehicles in and out</option>
+              <option value="ADMIN">Administrator — full configuration access</option>
+            </select>
+          </div>
+          {error && <p className="text-sm text-red-600">{error}</p>}
+          <button type="submit" disabled={submitting} className={btn.primary}>
+            Create account
+          </button>
+        </form>
+      </Card>
+    </PageShell>
   )
 }

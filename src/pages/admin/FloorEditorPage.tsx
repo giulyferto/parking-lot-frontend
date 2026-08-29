@@ -5,16 +5,19 @@ import { getFloor } from '../../api/floors'
 import { createSpot, deleteSpot, listSpots, updateSpotLayout, updateSpotStatus } from '../../api/spots'
 import { createRatePlan, listRatePlans } from '../../api/ratePlans'
 import { FloorMap } from '../../components/FloorMap/FloorMap'
+import { SPOT_COLORS } from '../../components/FloorMap/spotColors'
+import { Eyebrow } from '../../components/ui'
+import { btn, field } from '../../components/styles'
 import type { Floor, RatePlan, Spot, SpotStatus, VehicleType } from '../../types'
 
 const VEHICLE_TYPES: VehicleType[] = ['CAR', 'MOTORCYCLE', 'EV', 'HANDICAP']
 
 /**
- * The admin's drag-and-drop canvas editor: drag a spot to reposition it
+ * The admin's drag-and-drop canvas editor: drag a bay to reposition it
  * (FloorMap's onSpotDragEnd -> PATCH .../layout), and use the side panel to
- * set its size/rotation/status precisely or add a brand new spot. Rate
- * plans for this floor are managed further down the same page since both
- * are floor-level admin tasks.
+ * set its size/rotation/status precisely or add a brand new bay. Rate plans
+ * for this floor are managed further down the same panel since both are
+ * floor-level admin tasks.
  */
 export function FloorEditorPage() {
   const { floorId } = useParams<{ floorId: string }>()
@@ -43,47 +46,62 @@ export function FloorEditorPage() {
     reload()
   }
 
-  if (!floor) return <div className="p-6 text-sm text-slate-500">Loading...</div>
+  if (!floor) {
+    return <div className="px-6 py-6 font-mono text-xs uppercase tracking-[0.16em] text-slate-400">Loading…</div>
+  }
 
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b border-slate-200 bg-white px-4 py-2">
-        <Link to={`/admin/parking-lots/${floor.parkingLotId}`} className="text-sm text-blue-600 hover:underline">
-          &larr; Back to floors
+      <div className="border-b border-slate-200 bg-white px-4 py-3 sm:px-6">
+        <Link
+          to={`/admin/parking-lots/${floor.parkingLotId}`}
+          className="text-sm font-medium text-blue-600 hover:text-blue-700"
+        >
+          ← Back to floors
         </Link>
-        <h1 className="text-lg font-semibold text-slate-900">{floor.name} - layout &amp; rates</h1>
+        <h1 className="mt-0.5 font-display text-xl font-semibold tracking-tight text-slate-900">
+          {floor.name}
+          <span className="ml-2 font-mono text-xs uppercase tracking-[0.16em] text-slate-400">
+            Layout &amp; rates
+          </span>
+        </h1>
       </div>
-      <div className="flex min-h-0 flex-1">
-        <div className="min-w-0 flex-1 p-4">
-          {spots.length === 0 ? (
-            <p className="text-sm text-slate-500">
-              No spots yet - add one from the panel on the right, then drag it into place.
-            </p>
-          ) : (
-            <FloorMap
-              spots={spots}
-              selectedSpotId={selectedSpot?.id}
-              onSpotClick={setSelectedSpot}
-              onSpotDragEnd={handleDragEnd}
-            />
-          )}
+
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto md:flex-row md:overflow-hidden">
+        <div className="min-h-[55vh] min-w-0 p-4 md:min-h-0 md:flex-1 sm:p-6">
+          <div className="deck-grid h-full min-h-[24rem] w-full overflow-hidden rounded-xl border border-slate-200 md:min-h-0">
+            {spots.length === 0 ? (
+              <div className="flex h-full flex-col items-center justify-center gap-1 p-6 text-center">
+                <p className="text-sm font-medium text-slate-600">No bays yet</p>
+                <p className="text-sm text-slate-400">
+                  Add one from the panel on the right, then drag it into place.
+                </p>
+              </div>
+            ) : (
+              <FloorMap
+                spots={spots}
+                selectedSpotId={selectedSpot?.id}
+                onSpotClick={setSelectedSpot}
+                onSpotDragEnd={handleDragEnd}
+              />
+            )}
+          </div>
         </div>
-        <aside className="w-96 shrink-0 overflow-y-auto border-l border-slate-200 bg-white p-4">
+
+        <aside className="w-full shrink-0 space-y-5 border-t border-slate-200 bg-white p-5 md:w-96 md:overflow-y-auto md:border-l md:border-t-0">
           <AddSpotForm floorId={floor.id} onCreated={reload} />
-          <hr className="my-4 border-slate-200" />
+          <hr className="border-slate-100" />
           {selectedSpot ? (
             <SpotEditor
               key={selectedSpot.id}
               spot={selectedSpot}
               onClose={() => setSelectedSpot(null)}
-              onChanged={() => {
-                reload()
-              }}
+              onChanged={reload}
             />
           ) : (
-            <p className="text-sm text-slate-500">Click a spot to edit its size, rotation or status.</p>
+            <p className="text-sm text-slate-400">Click a bay to edit its size, rotation or status.</p>
           )}
-          <hr className="my-4 border-slate-200" />
+          <hr className="border-slate-100" />
           <RatePlansEditor floorId={floor.id} ratePlans={ratePlans} onCreated={reload} />
         </aside>
       </div>
@@ -110,19 +128,19 @@ function AddSpotForm({ floorId, onCreated }: { floorId: string; onCreated: () =>
 
   return (
     <form onSubmit={handleSubmit}>
-      <h2 className="mb-2 text-sm font-semibold text-slate-700">Add spot</h2>
+      <Eyebrow className="mb-3">Add bay</Eyebrow>
       <div className="mb-2 flex gap-2">
         <input
           required
           value={code}
           onChange={(e) => setCode(e.target.value)}
           placeholder="Code, e.g. A-01"
-          className="flex-1 rounded border border-slate-300 px-3 py-2 text-sm"
+          className={field}
         />
         <select
           value={vehicleType}
           onChange={(e) => setVehicleType(e.target.value as VehicleType)}
-          className="rounded border border-slate-300 px-2 py-2 text-sm"
+          className={`${field} w-auto`}
         >
           {VEHICLE_TYPES.map((t) => (
             <option key={t} value={t}>
@@ -131,12 +149,8 @@ function AddSpotForm({ floorId, onCreated }: { floorId: string; onCreated: () =>
           ))}
         </select>
       </div>
-      <button
-        type="submit"
-        disabled={submitting}
-        className="w-full rounded bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
-      >
-        Add spot (appears at 0,0 - drag it into place)
+      <button type="submit" disabled={submitting} className={`${btn.ghost} w-full`}>
+        Add bay — drops at 0,0, then drag it
       </button>
     </form>
   )
@@ -186,76 +200,79 @@ function SpotEditor({
 
   return (
     <div>
-      <div className="mb-2 flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-slate-700">Spot {spot.code}</h2>
-        <button onClick={onClose} className="text-xs text-slate-400 hover:text-slate-600">
+      <div className="mb-3 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span
+            className="inline-block h-3 w-4 rounded-[3px] ring-1 ring-inset ring-white/70"
+            style={{ backgroundColor: SPOT_COLORS[spot.status] }}
+          />
+          <h2 className="font-display text-sm font-semibold tracking-tight text-slate-900">
+            Bay {spot.code}
+          </h2>
+        </div>
+        <button onClick={onClose} className="text-xs font-medium text-slate-400 hover:text-slate-600">
           Close
         </button>
       </div>
-      <form onSubmit={handleSaveGeometry} className="mb-3 space-y-2">
+
+      <form onSubmit={handleSaveGeometry} className="mb-4 space-y-2.5">
         <div className="flex gap-2">
-          <div className="flex-1">
-            <label className="mb-1 block text-xs text-slate-500">Width</label>
-            <input
-              type="number"
-              value={width}
-              onChange={(e) => setWidth(e.target.value)}
-              className="w-full rounded border border-slate-300 px-2 py-1 text-sm"
-            />
-          </div>
-          <div className="flex-1">
-            <label className="mb-1 block text-xs text-slate-500">Height</label>
-            <input
-              type="number"
-              value={height}
-              onChange={(e) => setHeight(e.target.value)}
-              className="w-full rounded border border-slate-300 px-2 py-1 text-sm"
-            />
-          </div>
-          <div className="flex-1">
-            <label className="mb-1 block text-xs text-slate-500">Rotation</label>
-            <input
-              type="number"
-              value={rotation}
-              onChange={(e) => setRotation(e.target.value)}
-              className="w-full rounded border border-slate-300 px-2 py-1 text-sm"
-            />
-          </div>
+          {[
+            ['Width', width, setWidth] as const,
+            ['Height', height, setHeight] as const,
+            ['Rotation', rotation, setRotation] as const,
+          ].map(([label, value, set]) => (
+            <div key={label} className="flex-1">
+              <label className="mb-1 block font-mono text-[10px] uppercase tracking-[0.14em] text-slate-400">
+                {label}
+              </label>
+              <input
+                type="number"
+                value={value}
+                onChange={(e) => set(e.target.value)}
+                className={`${field} px-2 py-1.5`}
+              />
+            </div>
+          ))}
         </div>
-        <button
-          type="submit"
-          disabled={saving}
-          className="w-full rounded border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-50 disabled:opacity-50"
-        >
+        <button type="submit" disabled={saving} className={`${btn.ghost} w-full`}>
           Save size &amp; rotation
         </button>
       </form>
 
-      {spot.status !== 'OCCUPIED' && (
-        <div className="mb-3">
-          <label className="mb-1 block text-xs text-slate-500">Status</label>
-          <div className="flex gap-2">
+      {spot.status !== 'OCCUPIED' ? (
+        <div className="mb-4">
+          <label className="mb-1.5 block font-mono text-[10px] uppercase tracking-[0.14em] text-slate-400">
+            Status
+          </label>
+          <div className="flex flex-wrap gap-2">
             {(['AVAILABLE', 'DISABLED', 'MAINTENANCE'] as SpotStatus[]).map((s) => (
               <button
                 key={s}
                 onClick={() => handleSetStatus(s)}
                 disabled={spot.status === s}
-                className="rounded border border-slate-300 px-2 py-1 text-xs hover:bg-slate-50 disabled:opacity-40"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50 disabled:border-blue-200 disabled:bg-blue-50 disabled:text-blue-700"
               >
-                {s}
+                <span
+                  className="inline-block h-2.5 w-3.5 rounded-[2px] ring-1 ring-inset ring-white/70"
+                  style={{ backgroundColor: SPOT_COLORS[s] }}
+                />
+                {s.charAt(0) + s.slice(1).toLowerCase()}
               </button>
             ))}
           </div>
         </div>
-      )}
-      {spot.status === 'OCCUPIED' && (
-        <p className="mb-3 text-xs text-slate-500">
-          This spot is occupied - use the map's check-out flow, not this panel, to free it.
+      ) : (
+        <p className="mb-4 text-xs leading-relaxed text-slate-500">
+          This bay is occupied. Use the map’s check-out flow, not this panel, to free it.
         </p>
       )}
 
-      <button onClick={handleDelete} className="text-xs text-red-600 hover:underline">
-        Delete spot
+      <button
+        onClick={handleDelete}
+        className="text-xs font-semibold text-red-600 hover:text-red-700"
+      >
+        Delete bay
       </button>
     </div>
   )
@@ -300,24 +317,31 @@ function RatePlansEditor({
 
   return (
     <div>
-      <h2 className="mb-2 text-sm font-semibold text-slate-700">Rate plans</h2>
-      <ul className="mb-3 space-y-1 text-xs text-slate-600">
+      <Eyebrow className="mb-3">Rate plans</Eyebrow>
+      <ul className="mb-3 space-y-1.5">
         {ratePlans.map((plan) => (
-          <li key={plan.id} className="rounded border border-slate-200 px-2 py-1">
-            <span className="font-medium">{plan.vehicleType}</span> - hourly {plan.currency}{' '}
-            {plan.hourlyRate}
+          <li
+            key={plan.id}
+            className="rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-600"
+          >
+            <span className="font-mono font-semibold uppercase tracking-[0.1em] text-slate-800">
+              {plan.vehicleType}
+            </span>{' '}
+            — hourly {plan.currency} {plan.hourlyRate}
             {plan.nightRate ? `, night ${plan.nightRate}` : ''}
             {plan.dayRate ? `, day ${plan.dayRate}` : ''}
             {plan.monthRate ? `, month ${plan.monthRate}` : ''}
           </li>
         ))}
-        {ratePlans.length === 0 && <li className="text-slate-400">No rate plans yet.</li>}
+        {ratePlans.length === 0 && (
+          <li className="text-xs text-slate-400">No rate plans yet.</li>
+        )}
       </ul>
       <form onSubmit={handleSubmit} className="space-y-2">
         <select
           value={vehicleType}
           onChange={(e) => setVehicleType(e.target.value as VehicleType)}
-          className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
+          className={field}
         >
           {VEHICLE_TYPES.map((t) => (
             <option key={t} value={t}>
@@ -333,7 +357,7 @@ function RatePlansEditor({
           value={hourlyRate}
           onChange={(e) => setHourlyRate(e.target.value)}
           placeholder="Hourly rate (required)"
-          className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
+          className={field}
         />
         <input
           type="number"
@@ -342,7 +366,7 @@ function RatePlansEditor({
           value={nightRate}
           onChange={(e) => setNightRate(e.target.value)}
           placeholder="Night rate (optional)"
-          className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
+          className={field}
         />
         <input
           type="number"
@@ -351,7 +375,7 @@ function RatePlansEditor({
           value={dayRate}
           onChange={(e) => setDayRate(e.target.value)}
           placeholder="Day rate (optional)"
-          className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
+          className={field}
         />
         <input
           type="number"
@@ -360,13 +384,9 @@ function RatePlansEditor({
           value={monthRate}
           onChange={(e) => setMonthRate(e.target.value)}
           placeholder="Month rate (optional)"
-          className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
+          className={field}
         />
-        <button
-          type="submit"
-          disabled={submitting}
-          className="w-full rounded bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
-        >
+        <button type="submit" disabled={submitting} className={`${btn.primary} w-full`}>
           Add rate plan
         </button>
       </form>

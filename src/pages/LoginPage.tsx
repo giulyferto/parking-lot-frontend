@@ -2,6 +2,8 @@ import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
+import { BayMark, FieldLabel } from '../components/ui'
+import { btn, field } from '../components/styles'
 
 export function LoginPage() {
   const { login } = useAuth()
@@ -19,41 +21,59 @@ export function LoginPage() {
       await login(email, password)
       navigate('/', { replace: true })
     } catch {
-      setError('Invalid email or password')
+      setError('That email and password don’t match. Check them and try again.')
     } finally {
       setSubmitting(false)
     }
   }
 
   return (
-    <div className="flex h-screen items-center justify-center bg-slate-100">
-      <form onSubmit={handleSubmit} className="w-80 rounded-lg bg-white p-6 shadow-sm">
-        <h1 className="mb-4 text-lg font-semibold text-slate-900">Parking Lot</h1>
-        <label className="mb-1 block text-sm text-slate-600">Email</label>
-        <input
-          type="email"
-          required
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          className="mb-3 w-full rounded border border-slate-300 px-3 py-2 text-sm"
-        />
-        <label className="mb-1 block text-sm text-slate-600">Password</label>
-        <input
-          type="password"
-          required
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          className="mb-4 w-full rounded border border-slate-300 px-3 py-2 text-sm"
-        />
-        {error && <p className="mb-3 text-sm text-red-600">{error}</p>}
-        <button
-          type="submit"
-          disabled={submitting}
-          className="w-full rounded bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+    <div className="bay-field flex min-h-screen items-center justify-center p-4">
+      <div className="w-full max-w-sm">
+        <div className="mb-6 flex flex-col items-center text-center">
+          <BayMark tone="light" className="h-12 w-12" />
+          <h1 className="mt-3 font-display text-2xl font-semibold tracking-tight text-white">
+            Parking Lot Ops
+          </h1>
+          <p className="mt-1 font-mono text-[11px] uppercase tracking-[0.2em] text-blue-200/70">
+            Attendant sign-in
+          </p>
+        </div>
+
+        <form
+          onSubmit={handleSubmit}
+          className="rounded-2xl border border-white/10 bg-white p-6 shadow-2xl shadow-slate-950/30"
         >
-          {submitting ? 'Signing in...' : 'Sign in'}
-        </button>
-      </form>
+          <div className="mb-4">
+            <FieldLabel>Email</FieldLabel>
+            <input
+              type="email"
+              required
+              autoFocus
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className={field}
+            />
+          </div>
+          <div className="mb-5">
+            <FieldLabel>Password</FieldLabel>
+            <input
+              type="password"
+              required
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className={field}
+            />
+          </div>
+          {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
+          <button type="submit" disabled={submitting} className={`${btn.primary} w-full`}>
+            {submitting ? 'Signing in…' : 'Sign in'}
+          </button>
+          <p className="mt-4 text-center text-xs leading-relaxed text-slate-400">
+            Accounts are created by an administrator from the Staff accounts page.
+          </p>
+        </form>
+      </div>
     </div>
   )
 }

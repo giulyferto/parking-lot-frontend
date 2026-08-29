@@ -3,6 +3,9 @@ import type { FormEvent } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { getParkingLot } from '../../api/parkingLots'
 import { createFloor, listFloors } from '../../api/floors'
+import { PageShell } from '../../components/Layout'
+import { Card, Eyebrow, FieldLabel } from '../../components/ui'
+import { btn, field } from '../../components/styles'
 import type { Floor, ParkingLot } from '../../types'
 
 export function ParkingLotDetailPage() {
@@ -34,62 +37,75 @@ export function ParkingLotDetailPage() {
     }
   }
 
-  if (!lot) return <div className="p-6 text-sm text-slate-500">Loading...</div>
+  if (!lot) {
+    return <div className="px-8 py-8 font-mono text-xs uppercase tracking-[0.16em] text-slate-400">Loading…</div>
+  }
 
   return (
-    <div className="mx-auto max-w-3xl p-6">
-      <Link to="/admin/parking-lots" className="text-sm text-blue-600 hover:underline">
-        &larr; All parking lots
-      </Link>
-      <h1 className="mb-4 mt-2 text-xl font-semibold text-slate-900">{lot.name} - floors</h1>
-
-      <ul className="mb-6 divide-y divide-slate-200 rounded border border-slate-200 bg-white">
-        {floors.map((floor) => (
-          <li key={floor.id} className="flex items-center justify-between px-4 py-3">
-            <div>
-              <p className="font-medium text-slate-900">{floor.name}</p>
-              <p className="text-sm text-slate-500">Level {floor.level}</p>
-            </div>
-            <Link to={`/admin/floors/${floor.id}`} className="text-sm text-blue-600 hover:underline">
-              Edit layout &amp; rates
-            </Link>
-          </li>
-        ))}
-        {floors.length === 0 && <li className="px-4 py-3 text-sm text-slate-500">No floors yet.</li>}
-      </ul>
-
-      <form onSubmit={handleCreate} className="rounded border border-slate-200 bg-white p-4">
-        <h2 className="mb-3 text-sm font-semibold text-slate-700">New floor</h2>
-        <div className="mb-3 flex gap-3">
-          <div className="w-24">
-            <label className="mb-1 block text-sm text-slate-600">Level</label>
-            <input
-              type="number"
-              required
-              value={level}
-              onChange={(e) => setLevel(e.target.value)}
-              className="w-full rounded border border-slate-300 px-3 py-2 text-sm"
-            />
-          </div>
-          <div className="flex-1">
-            <label className="mb-1 block text-sm text-slate-600">Name</label>
-            <input
-              required
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Ground floor"
-              className="w-full rounded border border-slate-300 px-3 py-2 text-sm"
-            />
-          </div>
-        </div>
-        <button
-          type="submit"
-          disabled={submitting}
-          className="rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+    <PageShell eyebrow={`Lot · ${lot.name}`} title="Floors">
+      <div className="-mt-3">
+        <Link
+          to="/admin/parking-lots"
+          className="text-sm font-medium text-blue-600 hover:text-blue-700"
         >
-          Create
-        </button>
-      </form>
-    </div>
+          ← All parking lots
+        </Link>
+      </div>
+
+      <Card>
+        <ul className="divide-y divide-slate-100">
+          {floors.map((floor) => (
+            <li key={floor.id} className="flex items-center justify-between gap-4 px-4 py-3.5">
+              <div className="min-w-0">
+                <p className="truncate font-medium text-slate-900">{floor.name}</p>
+                <p className="font-mono text-xs uppercase tracking-[0.14em] text-slate-400">
+                  Level {floor.level}
+                </p>
+              </div>
+              <Link
+                to={`/admin/floors/${floor.id}`}
+                className="shrink-0 text-sm font-semibold text-blue-600 hover:text-blue-700"
+              >
+                Edit layout & rates →
+              </Link>
+            </li>
+          ))}
+          {floors.length === 0 && (
+            <li className="px-4 py-8 text-center text-sm text-slate-400">No floors yet.</li>
+          )}
+        </ul>
+      </Card>
+
+      <Card className="p-5">
+        <Eyebrow className="mb-4">New floor</Eyebrow>
+        <form onSubmit={handleCreate} className="space-y-4">
+          <div className="flex gap-3">
+            <div className="w-24">
+              <FieldLabel>Level</FieldLabel>
+              <input
+                type="number"
+                required
+                value={level}
+                onChange={(e) => setLevel(e.target.value)}
+                className={field}
+              />
+            </div>
+            <div className="flex-1">
+              <FieldLabel>Name</FieldLabel>
+              <input
+                required
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Ground floor"
+                className={field}
+              />
+            </div>
+          </div>
+          <button type="submit" disabled={submitting} className={btn.primary}>
+            Create floor
+          </button>
+        </form>
+      </Card>
+    </PageShell>
   )
 }

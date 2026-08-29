@@ -15,11 +15,11 @@ interface FloorMapProps {
 }
 
 /**
- * Renders every spot on a floor as a color-coded rectangle. This is a
- * "React owns the container, D3 owns the children" component: the effect
- * below re-runs the D3 enter/update/exit join whenever `spots` changes
- * (including from a WebSocket push - see useFloorSocket), so status changes
- * animate in without React re-rendering the DOM node-by-node itself.
+ * Renders every bay on a floor as a color-coded stall with a near-white
+ * "paint" outline. This is a "React owns the container, D3 owns the children"
+ * component: the effect below re-runs the D3 enter/update/exit join whenever
+ * `spots` changes (including from a WebSocket push - see useFloorSocket), and a
+ * CSS fill transition on the stall makes each status flip visible.
  */
 export function FloorMap({ spots, selectedSpotId, onSpotClick, onSpotDragEnd, className }: FloorMapProps) {
   const svgRef = useRef<SVGSVGElement | null>(null)
@@ -38,10 +38,14 @@ export function FloorMap({ spots, selectedSpotId, onSpotClick, onSpotDragEnd, cl
 
     const drag = d3
       .drag<SVGGElement, Spot>()
+      .on('start', function () {
+        d3.select(this).raise().classed('is-dragging', true)
+      })
       .on('drag', function (event, d) {
         d3.select(this).attr('transform', `translate(${event.x}, ${event.y}) rotate(${d.rotation})`)
       })
-      .on('end', (event, d) => {
+      .on('end', function (event, d) {
+        d3.select(this).classed('is-dragging', false)
         onSpotDragEnd?.(d, event.x, event.y)
       })
 
@@ -58,15 +62,28 @@ export function FloorMap({ spots, selectedSpotId, onSpotClick, onSpotDragEnd, cl
       .attr('class', 'spot')
       .style('cursor', onSpotClick || onSpotDragEnd ? 'pointer' : 'default')
 
-    entered.append('rect').attr('class', 'spot-rect').attr('rx', 4)
+    // Two rects: the status fill, then an inset near-white "painted line".
+    entered
+      .append('rect')
+      .attr('class', 'spot-rect')
+      .attr('rx', 5)
+      .style('transition', 'fill 200ms ease')
+      .attr('filter', 'url(#spot-shadow)')
+    entered.append('rect').attr('class', 'spot-paint').attr('fill', 'none').attr('pointer-events', 'none')
     entered
       .append('text')
       .attr('class', 'spot-label')
       .attr('text-anchor', 'middle')
       .attr('dominant-baseline', 'central')
+      .attr('font-family', '"IBM Plex Mono", ui-monospace, monospace')
       .attr('font-size', 11)
       .attr('font-weight', 600)
+      .attr('letter-spacing', 0.5)
       .attr('fill', SPOT_LABEL_COLOR)
+      // Thin light halo so the code stays legible on any status fill.
+      .attr('stroke', 'rgba(255,255,255,0.85)')
+      .attr('stroke-width', 3)
+      .style('paint-order', 'stroke')
       .attr('pointer-events', 'none')
 
     const merged = entered.merge(groups)
@@ -86,14 +103,32 @@ export function FloorMap({ spots, selectedSpotId, onSpotClick, onSpotDragEnd, cl
       .attr('width', (d) => d.width)
       .attr('height', (d) => d.height)
       .attr('fill', (d) => SPOT_COLORS[d.status])
-      .attr('stroke', (d) => (d.id === selectedSpotId ? SPOT_SELECTED_STROKE : SPOT_STROKE))
-      .attr('stroke-width', (d) => (d.id === selectedSpotId ? 3 : 2))
+      .attr('fill-opacity', (d) => (d.status === 'DISABLED' ? 0.55 : 0.9))
+      .attr('stroke', (d) => (d.id === selectedSpotId ? SPOT_SELECTED_STROKE : 'rgba(15,23,42,0.12)'))
+      .attr('stroke-width', (d) => (d.id === selectedSpotId ? 2.5 : 1))
+
+    merged
+      .select<SVGRectElement>('rect.spot-paint')
+      .attr('x', (d) => -d.width / 2 + 3.5)
+      .attr('y', (d) => -d.height / 2 + 3.5)
+      .attr('width', (d) => Math.max(d.width - 7, 0))
+      .attr('height', (d) => Math.max(d.height - 7, 0))
+      .attr('rx', 3)
+      .attr('stroke', SPOT_STROKE)
+      .attr('stroke-width', 1.5)
+      .attr('stroke-opacity', 0.7)
+      .attr('stroke-dasharray', (d) => (d.status === 'MAINTENANCE' ? '4 3' : null))
 
     merged.select<SVGTextElement>('text.spot-label').text((d) => d.code)
   }, [spots, selectedSpotId, onSpotClick, onSpotDragEnd])
 
   return (
     <svg ref={svgRef} className={className ?? 'h-full w-full'}>
+      <defs>
+        <filter id="spot-shadow" x="-30%" y="-30%" width="160%" height="160%">
+          <feDropShadow dx="0" dy="1" stdDeviation="1.2" floodColor="#0f172a" floodOpacity="0.14" />
+        </filter>
+      </defs>
       <g className="spots" />
     </svg>
   )
