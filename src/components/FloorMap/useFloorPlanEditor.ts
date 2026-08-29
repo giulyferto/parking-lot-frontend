@@ -21,6 +21,11 @@ export type EditorTool =
   | 'street'
   | 'entrance'
   | 'calibrate'
+  // Places a whole row of bays along a drawn baseline. Its state lives in the
+  // separate useSpotRowTool hook (bays are a different entity from FloorElements
+  // with a different persistence path); this file only needs the tool name so
+  // canvasClick no-ops for it (absent from TOOL_SHAPE) and setTool clears drafts.
+  | 'spotRow'
 
 /** Tool -> the element kind + geometry shape it draws. `select`/`column`/`calibrate` absent. */
 const TOOL_SHAPE: Partial<

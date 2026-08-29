@@ -178,10 +178,11 @@ exactly - keep the two in sync if either changes.
   current state - see that repo's CLAUDE.md).
 - No tests yet. If adding some, Vitest + React Testing Library is the
   natural fit for this stack (already using Vite).
-- Two oxlint warnings are accepted as-is: `AuthContext.tsx` exporting both
+- Three oxlint warnings are accepted as-is: `AuthContext.tsx` exporting both
   the provider and the `useAuth` hook (standard React context pattern,
-  harmless beyond a Fast Refresh nicety), and a `setState`-in-effect note in
-  `MapPage` for the floor-change reset.
+  harmless beyond a Fast Refresh nicety), and two `setState`-in-effect notes -
+  `MapPage` for the floor-change reset and `useSpotRowTool` for the
+  tool-change reset (both clear stale draft state when a prop flips).
 
 ## Running locally
 

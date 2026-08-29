@@ -22,9 +22,11 @@ import {
   unionBbox,
   type Bbox,
   type Point,
+  type SpotRowPlacement,
 } from './geometry'
 import { renderElement } from './floorElements'
 import type { FloorPlanEditorBag } from './useFloorPlanEditor'
+import type { SpotRowToolBag } from './useSpotRowTool'
 
 const PADDING_M = 2
 const MIN_VIEW_W_M = 20
@@ -51,6 +53,8 @@ interface FloorMapProps {
   onSpotDragEnd?: (spot: Spot, posX: number, posY: number) => void
   /** Present only in the admin editor - enables plan-drawing tools. */
   editor?: FloorPlanEditorBag
+  /** Present only in the admin editor - the "Parking row" bay-layout tool. */
+  spotRowTool?: SpotRowToolBag
   className?: string
 }
 
@@ -80,6 +84,7 @@ export function FloorMap({
   onSpotClick,
   onSpotDragEnd,
   editor,
+  spotRowTool,
   className,
 }: FloorMapProps) {
   const svgRef = useRef<SVGSVGElement | null>(null)
@@ -111,7 +116,7 @@ export function FloorMap({
 
     // 2. viewBox - frozen while a draw/calibrate draft is in progress so the
     //    canvas doesn't jump under the cursor.
-    const drafting = !!editor?.draft
+    const drafting = !!editor?.draft || (!!spotRowTool?.active && !!spotRowTool.baseline)
     let vb: ViewBox
     if (drafting && frozenVbRef.current) {
       vb = frozenVbRef.current
@@ -348,6 +353,79 @@ export function FloorMap({
           .on('end', (event, i) => editor.moveRulerEnd(i, [event.x, event.y]))
         ends.call(rulerDrag)
       }
+
+      // "Parking row" tool: dashed baseline + a dashed preview rect per stall,
+      // plus draggable baseline endpoints once the row is placed. Mirrors the
+      // ruler above; all sizes are meters, strokes non-scaling.
+      const rt = spotRowTool
+      if (rt?.active && rt.baseline) {
+        const { p0, p1 } = rt.baseline
+        const g = overlay.append('g').attr('class', 'row-preview')
+        g.append('line')
+          .attr('x1', p0[0])
+          .attr('y1', p0[1])
+          .attr('x2', p1[0])
+          .attr('y2', p1[1])
+          .attr('stroke', SPOT_SELECTED_STROKE)
+          .attr('stroke-width', 1.5)
+          .attr('stroke-dasharray', '4 3')
+          .style('vector-effect', 'non-scaling-stroke')
+        g.selectAll<SVGRectElement, SpotRowPlacement>('rect.row-cell')
+          .data(rt.placements)
+          .enter()
+          .append('rect')
+          .attr('class', 'row-cell')
+          .attr('transform', (p) => `translate(${p.posX},${p.posY}) rotate(${p.rotation})`)
+          .attr('x', (p) => -p.width / 2)
+          .attr('y', (p) => -p.height / 2)
+          .attr('width', (p) => p.width)
+          .attr('height', (p) => p.height)
+          .attr('rx', 0.15)
+          .attr('fill', 'rgba(37,99,235,0.08)')
+          .attr('stroke', SPOT_SELECTED_STROKE)
+          .attr('stroke-width', 1.5)
+          .attr('stroke-dasharray', '4 3')
+          .style('vector-effect', 'non-scaling-stroke')
+        const rowFont = pxToMeters(12, k)
+        g.append('text')
+          .attr('x', (p0[0] + p1[0]) / 2)
+          .attr('y', (p0[1] + p1[1]) / 2 - rowFont)
+          .attr('text-anchor', 'middle')
+          .attr('font-family', '"IBM Plex Mono", ui-monospace, monospace')
+          .attr('font-size', rowFont)
+          .attr('fill', SPOT_SELECTED_STROKE)
+          .attr('stroke', 'rgba(255,255,255,0.9)')
+          .attr('stroke-width', rowFont * 0.22)
+          .style('paint-order', 'stroke')
+          .text(`${rt.placements.length} ${rt.placements.length === 1 ? 'bay' : 'bays'}`)
+        if (rt.phase === 'ready') {
+          const pts: [Point, Point] = [p0, p1]
+          const rowEnds = g
+            .selectAll<SVGCircleElement, 0 | 1>('circle.rb')
+            .data([0, 1] as const)
+            .enter()
+            .append('circle')
+            .attr('class', 'rb')
+            .attr('cx', (i) => pts[i][0])
+            .attr('cy', (i) => pts[i][1])
+            .attr('r', handleR * 1.3)
+            .attr('fill', '#fff')
+            .attr('stroke', SPOT_SELECTED_STROKE)
+            .attr('stroke-width', 2)
+            .style('vector-effect', 'non-scaling-stroke')
+            .style('pointer-events', 'all')
+            .style('cursor', 'pointer')
+          const rowDrag = d3
+            .drag<SVGCircleElement, 0 | 1>()
+            .container(dragContainer)
+            .on('start', (event) => event.sourceEvent.stopPropagation())
+            .on('drag', function (event) {
+              d3.select(this).attr('cx', event.x).attr('cy', event.y)
+            })
+            .on('end', (event, i) => rt.moveBaselineEnd(i, [event.x, event.y]))
+          rowEnds.call(rowDrag)
+        }
+      }
     }
 
     // 4. Pan/zoom. Recreated each run so its closures see fresh props; the
@@ -453,16 +531,23 @@ export function FloorMap({
       .style('pointer-events', editor ? 'all' : 'none')
     if (editor) {
       const activeEditor = editor
+      const rowActive = !!spotRowTool?.active
       const placing = activeEditor.tool !== 'select'
       const place = (event: MouseEvent) => {
         const [mx, my] = d3.pointer(event, viewportNode)
-        activeEditor.canvasClick([mx, my])
+        if (rowActive && spotRowTool) spotRowTool.canvasClick([mx, my])
+        else activeEditor.canvasClick([mx, my])
       }
       hit
         .style('cursor', placing ? 'crosshair' : 'default')
         .on('mousemove', (event: MouseEvent) => {
-          cursorRef.current = d3.pointer(event, viewportNode) as Point
+          const world = d3.pointer(event, viewportNode) as Point
+          cursorRef.current = world
           if (activeEditor.draft?.mode === 'shape') drawOverlay(d3.zoomTransform(svgEl).k || 1)
+          if (rowActive && spotRowTool?.baseline) {
+            spotRowTool.handlePointerMove(world)
+            drawOverlay(d3.zoomTransform(svgEl).k || 1)
+          }
         })
         .on('dblclick', (event: MouseEvent) => {
           event.preventDefault()
@@ -595,6 +680,7 @@ export function FloorMap({
     onSpotClick,
     onSpotDragEnd,
     editor,
+    spotRowTool,
   ])
 
   return (

@@ -2,7 +2,14 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { getFloor, rescaleFloor } from '../../api/floors'
-import { createSpot, deleteSpot, listSpots, updateSpotLayout, updateSpotStatus } from '../../api/spots'
+import {
+  createSpot,
+  deleteSpot,
+  listSpots,
+  updateSpotLayout,
+  updateSpotStatus,
+  type SpotInput,
+} from '../../api/spots'
 import { createRatePlan, listRatePlans } from '../../api/ratePlans'
 import {
   createFloorElement,
@@ -15,12 +22,24 @@ import {
 import { FloorMap } from '../../components/FloorMap/FloorMap'
 import { SPOT_COLORS } from '../../components/FloorMap/spotColors'
 import { ELEMENT_LABELS } from '../../components/FloorMap/floorElementStyles'
-import { geometrySummary, minVertices } from '../../components/FloorMap/geometry'
+import {
+  geometrySummary,
+  minVertices,
+  type SpotRowPlacement,
+} from '../../components/FloorMap/geometry'
 import {
   useFloorPlanEditor,
   type EditorTool,
   type FloorPlanEditorBag,
 } from '../../components/FloorMap/useFloorPlanEditor'
+import { useSpotRowTool, type SpotRowToolBag } from '../../components/FloorMap/useSpotRowTool'
+import {
+  AISLE_WIDTH_BY_ANGLE_M,
+  ANGLE_PRESETS_DEG,
+  ROW_PARK_ANGLES,
+  STALL_DIMENSIONS_BY_VEHICLE,
+  STALL_PRESETS,
+} from '../../components/FloorMap/spotDimensions'
 import { Eyebrow } from '../../components/ui'
 import { btn, field } from '../../components/styles'
 import type { Floor, FloorElement, RatePlan, Spot, SpotStatus, VehicleType } from '../../types'
@@ -35,6 +54,7 @@ const TOOLS: Array<[EditorTool, string]> = [
   ['lane', 'Drive lane'],
   ['street', 'Street'],
   ['entrance', 'Entrance'],
+  ['spotRow', 'Parking row'],
   ['calibrate', 'Calibrate'],
 ]
 
@@ -46,6 +66,7 @@ const TOOL_HINT: Record<EditorTool, string> = {
   street: 'Click along the road · press Enter to finish · Esc cancels',
   column: 'Click to drop a column',
   entrance: 'Click the two ends of the entrance (arrow points at the 2nd)',
+  spotRow: 'Click the two ends of the row along the aisle, then set it up on the right · Esc cancels',
   calibrate: 'Click two points across a distance you know, then enter it on the right',
 }
 
@@ -139,6 +160,78 @@ export function FloorEditorPage() {
     onRescale,
   })
 
+  // createSpot sends no geometry, so chain a layout PATCH with the standard
+  // metric footprint for the vehicle type, dropping the bay on a staggered grid
+  // so successive adds don't stack on top of each other at the origin.
+  const handleCreateSpot = useCallback(
+    async (input: SpotInput) => {
+      if (!floorId) return
+      try {
+        const created = await createSpot(floorId, input)
+        const dims = STALL_DIMENSIONS_BY_VEHICLE[input.vehicleType]
+        if (created && created.id) {
+          const n = spots.length
+          const cols = 8
+          await updateSpotLayout(created.id, {
+            posX: (n % cols) * (dims.width + 0.6),
+            posY: Math.floor(n / cols) * (dims.height + 0.6),
+            width: dims.width,
+            height: dims.height,
+            rotation: 0,
+          })
+        }
+      } catch {
+        window.alert('Could not create that bay (the code may already be in use).')
+      }
+      reload()
+    },
+    [floorId, spots.length, reload],
+  )
+
+  const existingCodes = useMemo(() => new Set(spots.map((s) => s.code)), [spots])
+
+  // The "Parking row" tool hands us its computed placements; persist them one by
+  // one (create + layout), sequentially so codes land in order and a mid-row
+  // failure is easy to reason about. A bulk endpoint is the eventual fix.
+  const handleCommitRow = useCallback(
+    async (placements: SpotRowPlacement[]) => {
+      if (!floorId) return
+      let ok = 0
+      const failed: string[] = []
+      for (const p of placements) {
+        try {
+          const created = await createSpot(floorId, { code: p.code, vehicleType: p.vehicleType })
+          if (created && created.id) {
+            await updateSpotLayout(created.id, {
+              posX: p.posX,
+              posY: p.posY,
+              width: p.width,
+              height: p.height,
+              rotation: p.rotation,
+            })
+          }
+          ok += 1
+        } catch {
+          failed.push(p.code)
+        }
+      }
+      reload()
+      if (failed.length) {
+        window.alert(
+          `Created ${ok} of ${placements.length} bays. Failed (duplicate code?): ${failed.join(', ')}.`,
+        )
+      }
+    },
+    [floorId, reload],
+  )
+
+  const spotRow = useSpotRowTool({
+    active: editor.tool === 'spotRow',
+    gridStepM: snapEnabled ? gridStepM : 0,
+    snapEnabled,
+    onCommitRow: handleCommitRow,
+  })
+
   const boundaryExists = useMemo(() => elements.some((e) => e.kind === 'BOUNDARY'), [elements])
 
   if (!floor) {
@@ -193,6 +286,7 @@ export function FloorEditorPage() {
                 gridStepM={gridStepM}
                 fitToken={fitToken}
                 editor={editor}
+                spotRowTool={spotRow}
                 onSpotClick={setSelectedSpot}
                 onSpotDragEnd={handleDragEnd}
               />
@@ -214,7 +308,13 @@ export function FloorEditorPage() {
             onShowScaleBar={setShowScaleBar}
           />
           <hr className="border-slate-100" />
-          <AddSpotForm floorId={floor.id} onCreated={reload} />
+          {editor.tool === 'spotRow' && (
+            <>
+              <SpotRowPanel tool={spotRow} onDone={() => editor.setTool('select')} existingCodes={existingCodes} />
+              <hr className="border-slate-100" />
+            </>
+          )}
+          <AddSpotForm onCreate={handleCreateSpot} />
           <hr className="border-slate-100" />
           {selectedSpot ? (
             <SpotEditor
@@ -279,6 +379,9 @@ function ToolStrip({
 }
 
 const microLabel = 'mb-1 block font-mono text-[10px] uppercase tracking-[0.14em] text-slate-400'
+
+const presetChip =
+  'rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50'
 
 function PlanScalePanel({
   editor,
@@ -553,7 +656,242 @@ function hexOr(value: string | undefined, fallback: string): string {
   return value && /^#[0-9a-fA-F]{6}$/.test(value) ? value : fallback
 }
 
-function AddSpotForm({ floorId, onCreated }: { floorId: string; onCreated: () => void }) {
+function SpotRowPanel({
+  tool,
+  onDone,
+  existingCodes,
+}: {
+  tool: SpotRowToolBag
+  onDone: () => void
+  existingCodes: Set<string>
+}) {
+  const { params, placements } = tool
+  const sinPhi = Math.max(Math.sin((params.angleDeg * Math.PI) / 180), 1e-3)
+  const pitch = params.stallWidthM / sinPhi
+  const clash = placements.filter((p) => existingCodes.has(p.code))
+  const first = placements[0]?.code
+  const last = placements[placements.length - 1]?.code
+  const num = (raw: string) => (raw === '' ? 0 : Number(raw))
+
+  return (
+    <div>
+      <Eyebrow className="mb-3">Parking row</Eyebrow>
+
+      {tool.phase === 'idle' && (
+        <p className="mb-3 text-xs leading-relaxed text-slate-500">
+          Click the two ends of the row along the aisle on the plan. Drag the endpoints afterwards to
+          fine-tune.
+        </p>
+      )}
+
+      <div className="space-y-3 text-sm text-slate-600">
+        <div>
+          <span className={microLabel}>Parking angle</span>
+          <div className="flex flex-wrap gap-1.5">
+            {ROW_PARK_ANGLES.map((a) => (
+              <button
+                key={a}
+                type="button"
+                onClick={() => tool.setParams({ angleDeg: a })}
+                className={`${presetChip} ${
+                  params.angleDeg === a ? 'border-blue-200 bg-blue-50 text-blue-700' : ''
+                }`}
+              >
+                {a}&deg;
+              </button>
+            ))}
+          </div>
+          <p className="mt-1 text-[11px] text-slate-400">
+            Aisle guidance: {AISLE_WIDTH_BY_ANGLE_M[params.angleDeg]} m (
+            {params.angleDeg === 90 ? 'two-way' : 'one-way'})
+          </p>
+        </div>
+
+        <label className="block">
+          <span className={microLabel}>Vehicle type</span>
+          <select
+            value={params.vehicleType}
+            onChange={(e) => tool.setParams({ vehicleType: e.target.value as VehicleType })}
+            className={`${field} px-2 py-1.5`}
+          >
+            {VEHICLE_TYPES.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <div className="flex gap-2">
+          <label className="flex-1">
+            <span className={microLabel}>Stall width (m)</span>
+            <input
+              type="number"
+              min="0.5"
+              step="0.1"
+              value={params.stallWidthM}
+              onChange={(e) => tool.setParams({ stallWidthM: num(e.target.value) })}
+              className={`${field} px-2 py-1.5`}
+            />
+          </label>
+          <label className="flex-1">
+            <span className={microLabel}>Stall depth (m)</span>
+            <input
+              type="number"
+              min="0.5"
+              step="0.1"
+              value={params.stallDepthM}
+              onChange={(e) => tool.setParams({ stallDepthM: num(e.target.value) })}
+              className={`${field} px-2 py-1.5`}
+            />
+          </label>
+        </div>
+
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={params.autoFill}
+            onChange={(e) => tool.setParams({ autoFill: e.target.checked })}
+          />
+          Fill the baseline to length
+        </label>
+
+        {params.autoFill ? (
+          <p className="text-[11px] text-slate-400">
+            Fits {tool.capacity} {tool.capacity === 1 ? 'bay' : 'bays'} · {tool.leftoverM.toFixed(2)} m
+            left over
+          </p>
+        ) : (
+          <label className="block">
+            <span className={microLabel}>Count</span>
+            <input
+              type="number"
+              min="1"
+              step="1"
+              value={params.count}
+              onChange={(e) => tool.setParams({ count: num(e.target.value) })}
+              className={`${field} px-2 py-1.5`}
+            />
+          </label>
+        )}
+
+        <div>
+          <span className={microLabel}>Side of the line</span>
+          <div className="flex flex-wrap gap-1.5">
+            {(['left', 'right'] as const).map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => tool.setParams({ side: s })}
+                className={`${presetChip} ${
+                  params.side === s ? 'border-blue-200 bg-blue-50 text-blue-700' : ''
+                }`}
+              >
+                {s === 'left' ? 'Left of line' : 'Right of line'}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {params.angleDeg !== 90 && (
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={params.flip}
+              onChange={(e) => tool.setParams({ flip: e.target.checked })}
+            />
+            Flip the angle direction
+          </label>
+        )}
+
+        <div className="flex gap-2">
+          <label className="flex-1">
+            <span className={microLabel}>Code prefix</span>
+            <input
+              type="text"
+              value={params.codePrefix}
+              onChange={(e) => tool.setParams({ codePrefix: e.target.value })}
+              placeholder="e.g. A-"
+              className={`${field} px-2 py-1.5`}
+            />
+          </label>
+          <label className="w-20">
+            <span className={microLabel}>Start</span>
+            <input
+              type="number"
+              min="0"
+              step="1"
+              value={params.codeStart}
+              onChange={(e) => tool.setParams({ codeStart: num(e.target.value) })}
+              className={`${field} px-2 py-1.5`}
+            />
+          </label>
+          <label className="w-20">
+            <span className={microLabel}>Pad</span>
+            <input
+              type="number"
+              min="0"
+              step="1"
+              value={params.codePad}
+              onChange={(e) => tool.setParams({ codePad: num(e.target.value) })}
+              className={`${field} px-2 py-1.5`}
+            />
+          </label>
+        </div>
+      </div>
+
+      <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
+        {placements.length > 0 ? (
+          <>
+            <p>
+              <span className="font-semibold text-slate-900">
+                {placements.length} {placements.length === 1 ? 'bay' : 'bays'}
+              </span>{' '}
+              · {params.stallWidthM} &times; {params.stallDepthM} m · {params.angleDeg}&deg; · row{' '}
+              {(placements.length * pitch).toFixed(1)} m
+            </p>
+            {first && <p className="mt-0.5 font-mono text-slate-500">{first} … {last}</p>}
+          </>
+        ) : (
+          <p className="text-slate-400">Draw a baseline to preview the row.</p>
+        )}
+        {clash.length > 0 && (
+          <p className="mt-1 font-semibold text-red-600">
+            Codes already in use: {clash.map((p) => p.code).join(', ')}
+          </p>
+        )}
+      </div>
+
+      <div className="mt-3 flex gap-2">
+        <button
+          type="button"
+          disabled={
+            tool.phase !== 'ready' || tool.busy || placements.length === 0 || clash.length > 0
+          }
+          onClick={async () => {
+            await tool.generate()
+            onDone()
+          }}
+          className={`${btn.primary} flex-1`}
+        >
+          {tool.busy ? 'Creating…' : `Generate ${placements.length || ''} ${placements.length === 1 ? 'bay' : 'bays'}`}
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            tool.cancel()
+            onDone()
+          }}
+          className={btn.ghost}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function AddSpotForm({ onCreate }: { onCreate: (input: SpotInput) => Promise<void> }) {
   const [code, setCode] = useState('')
   const [vehicleType, setVehicleType] = useState<VehicleType>('CAR')
   const [submitting, setSubmitting] = useState(false)
@@ -562,9 +900,8 @@ function AddSpotForm({ floorId, onCreated }: { floorId: string; onCreated: () =>
     event.preventDefault()
     setSubmitting(true)
     try {
-      await createSpot(floorId, { code, vehicleType })
+      await onCreate({ code, vehicleType })
       setCode('')
-      onCreated()
     } finally {
       setSubmitting(false)
     }
@@ -594,7 +931,7 @@ function AddSpotForm({ floorId, onCreated }: { floorId: string; onCreated: () =>
         </select>
       </div>
       <button type="submit" disabled={submitting} className={`${btn.ghost} w-full`}>
-        Add bay — drops at 0,0, then drag it
+        Add bay — standard stall size for its type
       </button>
     </form>
   )
@@ -657,6 +994,41 @@ function SpotEditor({
         <button onClick={onClose} className="text-xs font-medium text-slate-400 hover:text-slate-600">
           Close
         </button>
+      </div>
+
+      <div className="mb-2">
+        <span className={microLabel}>Stall preset</span>
+        <div className="flex flex-wrap gap-1.5">
+          {STALL_PRESETS.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              title={p.note}
+              onClick={() => {
+                setWidth(String(p.size.width))
+                setHeight(String(p.size.height))
+              }}
+              className={presetChip}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="mb-3">
+        <span className={microLabel}>Angle</span>
+        <div className="flex flex-wrap gap-1.5">
+          {ANGLE_PRESETS_DEG.map((deg) => (
+            <button
+              key={deg}
+              type="button"
+              onClick={() => setRotation(String(deg))}
+              className={presetChip}
+            >
+              {deg}&deg;
+            </button>
+          ))}
+        </div>
       </div>
 
       <form onSubmit={handleSaveGeometry} className="mb-4 space-y-2.5">
