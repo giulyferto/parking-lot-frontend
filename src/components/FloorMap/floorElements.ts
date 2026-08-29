@@ -1,7 +1,8 @@
 import * as d3 from 'd3'
 import type { FloorElement, Geometry } from '../../types'
-import type { Point } from './geometry'
+import { distance, formatMeters, polygonCentroid, type Point } from './geometry'
 import {
+  BOUNDARY_WALL_THICKNESS_M,
   COLUMN_DEFAULT_RADIUS_M,
   EDIT_HANDLE_FILL,
   ELEMENT_COLORS,
@@ -62,7 +63,62 @@ export function renderElement(
     }
 
     if (geom.type === 'Polygon') {
-      addPath(pathDForGeometry(geom, true), {
+      const ringD = pathDForGeometry(geom, true)
+      if (el.kind === 'BOUNDARY') {
+        // The perimeter is the exterior wall - draw it the way a real plan does:
+        // a solid poché band of true wall thickness tracing the ring, not a
+        // hairline outline, so there's no separate "wall" to trace on top of it.
+        // A crisp non-scaling centreline keeps the wall readable when zoomed out
+        // far enough that the band collapses below a pixel.
+        const wallM = el.style?.widthM ?? BOUNDARY_WALL_THICKNESS_M
+        const wall = selected ? EDIT_HANDLE_FILL : el.style?.stroke ?? colors.stroke
+        if (fill !== 'none') {
+          addPath(ringD, { fill, 'fill-opacity': opacity, stroke: 'none' })
+        }
+        addPath(ringD, {
+          fill: 'none',
+          stroke: wall,
+          'stroke-width': wallM,
+          'stroke-linejoin': 'miter',
+          'stroke-miterlimit': 4,
+          'stroke-opacity': opacity,
+        }).style('vector-effect', null)
+        addPath(ringD, { fill: 'none', stroke: wall, 'stroke-width': selected ? 2 : 1 })
+
+        // Keep the wall lengths on screen after the ring is closed, not just
+        // while drawing: one dimension (m) per edge, sat just outside the wall.
+        if (ctx.interactive && geom.coordinates.length >= 2) {
+          const ring = geom.coordinates
+          const c = polygonCentroid(ring)
+          const fontM = 12 / Math.max(ctx.effectivePxPerMeter, 0.0001)
+          for (let i = 0; i < ring.length; i++) {
+            const a = ring[i]
+            const b = ring[(i + 1) % ring.length]
+            const len = distance(a, b)
+            if (len < 1e-4) continue
+            const mx = (a[0] + b[0]) / 2
+            const my = (a[1] + b[1]) / 2
+            const ol = Math.hypot(mx - c[0], my - c[1]) || 1
+            const dist = wallM / 2 + fontM * 1.1
+            g.append('text')
+              .attr('x', mx + ((mx - c[0]) / ol) * dist)
+              .attr('y', my + ((my - c[1]) / ol) * dist)
+              .attr('text-anchor', 'middle')
+              .attr('dominant-baseline', 'central')
+              .attr('font-family', '"IBM Plex Mono", ui-monospace, monospace')
+              .attr('font-size', fontM)
+              .attr('font-weight', 600)
+              .attr('fill', selected ? EDIT_HANDLE_FILL : '#0F172A')
+              .attr('stroke', 'rgba(255,255,255,0.9)')
+              .attr('stroke-width', fontM * 0.24)
+              .style('paint-order', 'stroke')
+              .style('pointer-events', 'none')
+              .text(formatMeters(len))
+          }
+        }
+        return
+      }
+      addPath(ringD, {
         fill,
         'fill-opacity': opacity,
         stroke,

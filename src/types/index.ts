@@ -100,7 +100,7 @@ export interface FloorElementStyle {
   stroke?: string
   strokeWidth?: number // screen px, drawn with vector-effect: non-scaling-stroke
   strokeDasharray?: string
-  widthM?: number // DRIVE_LANE / STREET: real lane width in meters
+  widthM?: number // DRIVE_LANE / STREET: real lane width in meters; BOUNDARY: wall thickness in meters
   radiusM?: number // COLUMN: radius in meters
   label?: string // LABEL text; optional caption on any kind
   opacity?: number // 0..1

@@ -441,6 +441,7 @@ function SelectedElementEditor({
       : element.geometry.coordinates
   const removable = coords.length > minVertices(element.geometry)
   const isLane = element.kind === 'DRIVE_LANE' || element.kind === 'STREET'
+  const isBoundary = element.kind === 'BOUNDARY'
 
   return (
     <div className="rounded-lg border border-slate-200 p-3">
@@ -478,13 +479,13 @@ function SelectedElementEditor({
             className="h-8 w-12 rounded border border-slate-200"
           />
         </label>
-        {isLane && (
+        {(isLane || isBoundary) && (
           <label className="block">
-            <span className={microLabel}>Lane width (m)</span>
+            <span className={microLabel}>{isBoundary ? 'Wall thickness (m)' : 'Lane width (m)'}</span>
             <input
               type="number"
-              min="0.5"
-              step="0.5"
+              min={isBoundary ? '0.1' : '0.5'}
+              step={isBoundary ? '0.05' : '0.5'}
               defaultValue={element.style?.widthM ?? ''}
               onBlur={(e) =>
                 e.target.value && editor.updateSelectedStyle({ widthM: Number(e.target.value) })

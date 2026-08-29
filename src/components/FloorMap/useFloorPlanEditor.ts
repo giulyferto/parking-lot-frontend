@@ -33,6 +33,13 @@ const TOOL_SHAPE: Partial<
   entrance: { kind: 'ENTRANCE', geomType: 'LineString' },
 }
 
+/**
+ * Length increment (meters) the in-progress segment snaps to when grid snap is
+ * off. A raw pixel cursor can't be placed between e.g. 3.97 m and 4.01 m when
+ * zoomed out, so exact measurements would be unreachable without this.
+ */
+const LENGTH_SNAP_M = 0.05
+
 export type DraftState =
   | { mode: 'shape'; kind: FloorElementKind; geomType: 'Polygon' | 'LineString'; vertices: Point[] }
   | { mode: 'ruler'; points: [Point, Point] }
@@ -56,6 +63,12 @@ export interface FloorPlanEditorBag {
   rulerLengthM: number | null
   snapEnabled: boolean
   gridStepM: number
+  /**
+   * Where a click while drawing actually lands: grid snap when it's on,
+   * otherwise the pending segment's length snapped to `LENGTH_SNAP_M` so exact
+   * measurements are reachable at any zoom. Used for the live draw preview.
+   */
+  snapDraftPoint: (worldRaw: Point) => Point
   /** Pointer -> world (meters) from FloorMap's hit rect. */
   canvasClick: (world: Point) => void
   canvasDblClick: () => void
@@ -84,6 +97,28 @@ export function useFloorPlanEditor(opts: UseFloorPlanEditorOptions): FloorPlanEd
   const snap = useCallback(
     (p: Point): Point => (snapEnabled ? snapToGrid(p, gridStepM) : p),
     [snapEnabled, gridStepM],
+  )
+
+  const snapDraftPoint = useCallback(
+    (worldRaw: Point): Point => {
+      // Grid snap, when the user turned it on, still wins.
+      if (snapEnabled && gridStepM > 0) return snapToGrid(worldRaw, gridStepM)
+      // Otherwise snap the length of the segment being drawn (from the last
+      // placed vertex) to LENGTH_SNAP_M, keeping the cursor's direction.
+      const anchor =
+        draft?.mode === 'shape' && draft.vertices.length > 0
+          ? draft.vertices[draft.vertices.length - 1]
+          : null
+      if (!anchor) return worldRaw
+      const dx = worldRaw[0] - anchor[0]
+      const dy = worldRaw[1] - anchor[1]
+      const len = Math.hypot(dx, dy)
+      if (len < 1e-9) return worldRaw
+      const snapped = Math.round(len / LENGTH_SNAP_M) * LENGTH_SNAP_M
+      const scale = snapped / len
+      return [anchor[0] + dx * scale, anchor[1] + dy * scale]
+    },
+    [snapEnabled, gridStepM, draft],
   )
 
   const setTool = useCallback((t: EditorTool) => {
@@ -135,18 +170,20 @@ export function useFloorPlanEditor(opts: UseFloorPlanEditorOptions): FloorPlanEd
       const shape = TOOL_SHAPE[tool]
       if (!shape) return
       const existing = draft?.mode === 'shape' ? draft.vertices : []
+      // Length-snap the pending point so exact segment measurements are reachable.
+      const pt = snapDraftPoint(worldRaw)
       const eps = Math.max(gridStepM * 0.5, 0.25)
       const last = existing[existing.length - 1]
       // Swallow the stray trailing click of a double-click (lands on the last point).
-      if (last && distance(world, last) < eps) return
+      if (last && distance(pt, last) < eps) return
       // Polygon: clicking back on the first vertex closes the ring.
-      if (shape.geomType === 'Polygon' && existing.length >= 3 && distance(world, existing[0]) < eps) {
+      if (shape.geomType === 'Polygon' && existing.length >= 3 && distance(pt, existing[0]) < eps) {
         onCreate({ kind: shape.kind, geometry: { type: 'Polygon', coordinates: existing } })
         setDraft(null)
         if (shape.kind === 'BOUNDARY') setToolState('select')
         return
       }
-      const vertices = [...existing, world]
+      const vertices = [...existing, pt]
       if (tool === 'entrance' && vertices.length === 2) {
         onCreate({ kind: 'ENTRANCE', geometry: { type: 'LineString', coordinates: vertices } })
         setDraft(null)
@@ -154,7 +191,7 @@ export function useFloorPlanEditor(opts: UseFloorPlanEditorOptions): FloorPlanEd
       }
       setDraft({ mode: 'shape', ...shape, vertices })
     },
-    [tool, snap, gridStepM, elements, draft, onCreate],
+    [tool, snap, snapDraftPoint, gridStepM, elements, draft, onCreate],
   )
 
   const canvasDblClick = useCallback(() => commitShape(draft), [commitShape, draft])
@@ -287,6 +324,7 @@ export function useFloorPlanEditor(opts: UseFloorPlanEditorOptions): FloorPlanEd
       rulerLengthM,
       snapEnabled,
       gridStepM,
+      snapDraftPoint,
       canvasClick,
       canvasDblClick,
       selectElement,
@@ -309,6 +347,7 @@ export function useFloorPlanEditor(opts: UseFloorPlanEditorOptions): FloorPlanEd
       rulerLengthM,
       snapEnabled,
       gridStepM,
+      snapDraftPoint,
       canvasClick,
       canvasDblClick,
       selectElement,

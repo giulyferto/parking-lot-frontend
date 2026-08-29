@@ -7,7 +7,7 @@ import type { FloorElementKind } from '../../types'
  * SPOT_SELECTED_STROKE), deliberately not one of the four status colors.
  */
 export const ELEMENT_COLORS: Record<FloorElementKind, { fill: string; stroke: string }> = {
-  BOUNDARY: { fill: 'none', stroke: '#0F172A' }, // heavy slate-900 perimeter wall
+  BOUNDARY: { fill: 'none', stroke: '#0F172A' }, // slate-900 poché - drawn as a solid wall band (BOUNDARY_WALL_THICKNESS_M), like an exterior wall on a real plan
   COLUMN: { fill: '#334155', stroke: '#F8FAFC' }, // solid slate-700, near-white edge
   WALL: { fill: 'none', stroke: '#475569' }, // slate-600 interior wall
   DRIVE_LANE: { fill: '#E2E8F0', stroke: '#CBD5E1' }, // asphalt: slate-200 / slate-300 edge
@@ -42,6 +42,7 @@ export const ELEMENT_LABELS: Record<FloorElementKind, string> = {
 }
 
 // Real-world default sizes (meters) - used when style.widthM / radiusM are absent.
+export const BOUNDARY_WALL_THICKNESS_M = 0.3 // exterior perimeter wall poché band width
 export const LANE_DEFAULT_WIDTH_M = 6
 export const STREET_DEFAULT_WIDTH_M = 7
 export const COLUMN_DEFAULT_RADIUS_M = 0.3
@@ -54,4 +55,7 @@ export const EDIT_HANDLE_FILL = '#2563EB'
 export const EDIT_HANDLE_RADIUS_PX = 4
 export const RUBBER_BAND_STROKE = '#2563EB'
 export const RULER_STROKE = '#2563EB'
-export const ZOOM_SCALE_EXTENT: [number, number] = [0.2, 20]
+// Wheel-zoom range [min k, max k]. min 0.1 = zoom out to ~10x the fitted view
+// (on a near-empty floor, whose viewBox is clamped to MIN_VIEW_W_M, that's
+// ~240 m across - enough to lay out a whole lot before any boundary exists).
+export const ZOOM_SCALE_EXTENT: [number, number] = [0.1, 20]

@@ -19,7 +19,6 @@ import {
   distance,
   formatMeters,
   niceScaleBarLength,
-  snapToGrid,
   unionBbox,
   type Bbox,
   type Point,
@@ -87,6 +86,7 @@ export function FloorMap({
   const frozenVbRef = useRef<ViewBox | null>(null)
   const cursorRef = useRef<Point | null>(null)
   const lastFitRef = useRef<number | undefined>(undefined)
+  const wasDraftingRef = useRef(false)
 
   useEffect(() => {
     const svgEl = svgRef.current
@@ -197,10 +197,7 @@ export function FloorMap({
       if (d?.mode === 'shape') {
         const raw = cursorRef.current
         // Preview where the point will actually land (snapped), not the raw cursor.
-        const cur =
-          raw && editor.snapEnabled && editor.gridStepM > 0
-            ? (snapToGrid(raw, editor.gridStepM) as Point)
-            : raw
+        const cur = raw ? editor.snapDraftPoint(raw) : null
         const preview = cur ? [...d.vertices, cur] : d.vertices
         if (preview.length >= 2) {
           overlay
@@ -211,6 +208,35 @@ export function FloorMap({
             .attr('stroke-width', 1.5)
             .attr('stroke-dasharray', '4 3')
             .style('vector-effect', 'non-scaling-stroke')
+
+          // Live dimensions: length (m) at each segment's midpoint, nudged off
+          // the line. The segment being stretched (last, when the cursor is
+          // live) is drawn solid; already-placed ones are muted.
+          const font = pxToMeters(12, k)
+          const off = pxToMeters(11, k)
+          for (let i = 1; i < preview.length; i++) {
+            const a = preview[i - 1]
+            const b = preview[i]
+            const len = distance(a, b)
+            if (len < 1e-4) continue
+            const nx = -(b[1] - a[1]) / len
+            const ny = (b[0] - a[0]) / len
+            const live = i === preview.length - 1 && !!cur
+            overlay
+              .append('text')
+              .attr('x', (a[0] + b[0]) / 2 + nx * off)
+              .attr('y', (a[1] + b[1]) / 2 + ny * off)
+              .attr('text-anchor', 'middle')
+              .attr('dominant-baseline', 'central')
+              .attr('font-family', '"IBM Plex Mono", ui-monospace, monospace')
+              .attr('font-size', font)
+              .attr('font-weight', live ? 700 : 600)
+              .attr('fill', live ? RUBBER_BAND_STROKE : 'rgba(37,99,235,0.6)')
+              .attr('stroke', 'rgba(255,255,255,0.9)')
+              .attr('stroke-width', font * 0.24)
+              .style('paint-order', 'stroke')
+              .text(formatMeters(len))
+          }
         }
         overlay
           .selectAll('circle.dv')
@@ -341,7 +367,13 @@ export function FloorMap({
       })
     svg.call(zoom).on('dblclick.zoom', null)
 
-    if (fitToken !== lastFitRef.current) {
+    // Re-fit when the caller bumps fitToken, and also right after a draw/
+    // calibrate draft ends - the frozen viewBox is gone, so snap the (possibly
+    // zoomed-out) transform back to the fresh fit instead of leaving content
+    // stranded off-screen.
+    const draftJustEnded = wasDraftingRef.current && !drafting
+    wasDraftingRef.current = drafting
+    if (fitToken !== lastFitRef.current || draftJustEnded) {
       lastFitRef.current = fitToken
       svg.call(zoom.transform, d3.zoomIdentity)
     }
@@ -349,10 +381,11 @@ export function FloorMap({
     viewport.attr('transform', d3.zoomTransform(svgEl).toString())
 
     // 5. Grid pattern (world-aligned; rect overshoots the viewBox so panning
-    //    still shows grid).
+    //    still shows grid). Kept to a small multiple - a huge tiled pattern is
+    //    expensive, and the grid is a cosmetic aid.
+    const gpad = Math.max(vb.w, vb.h)
     svg.select('#meter-grid').attr('width', step).attr('height', step)
     svg.select('#meter-grid path.grid-cell').attr('d', `M${step},0 L0,0 L0,${step}`)
-    const gpad = Math.max(vb.w, vb.h)
     svg
       .select('rect.grid-fill')
       .attr('x', vb.x - gpad)
@@ -404,13 +437,18 @@ export function FloorMap({
     }
 
     // 6b. Pointer surface for drawing (below spots/elements so their own
-    //     handlers win; catches clicks on empty canvas).
+    //     handlers win; catches clicks on empty canvas). It lives inside the
+    //     zoomed viewport, so at the zoomed-out limit the visible area is
+    //     1/ZOOM_SCALE_EXTENT[0] times the viewBox; pad by that (plus slack for
+    //     panning) or a click near the edge misses the rect and does nothing.
+    //     It's transparent and unpatterned, so an oversized rect is cheap.
+    const hitPad = (Math.max(vb.w, vb.h) * 3) / ZOOM_SCALE_EXTENT[0]
     const hit = viewport.select<SVGRectElement>('rect.hit')
     hit
-      .attr('x', vb.x - gpad)
-      .attr('y', vb.y - gpad)
-      .attr('width', vb.w + gpad * 2)
-      .attr('height', vb.h + gpad * 2)
+      .attr('x', vb.x - hitPad)
+      .attr('y', vb.y - hitPad)
+      .attr('width', vb.w + hitPad * 2)
+      .attr('height', vb.h + hitPad * 2)
       .attr('fill', 'transparent')
       .style('pointer-events', editor ? 'all' : 'none')
     if (editor) {

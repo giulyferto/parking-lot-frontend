@@ -90,7 +90,10 @@ not React children.
 
 `FloorElement` (see `types/index.ts`, mirrors the backend) is one flexible
 list keyed by `kind` - `BOUNDARY` (one polygon per floor, frames the
-viewBox), `COLUMN`, `WALL`, `DRIVE_LANE`, `STREET`, `ENTRANCE`, `LABEL` -
+viewBox; rendered as a solid wall band of real thickness -
+`style.widthM`, default `BOUNDARY_WALL_THICKNESS_M` - tracing the ring, so
+it *is* the exterior wall, no separate `WALL` needed on the perimeter),
+`COLUMN`, `WALL`, `DRIVE_LANE`, `STREET`, `ENTRANCE`, `LABEL` -
 each with a GeoJSON-ish `geometry` (`Polygon` / `LineString` / `Point`) and
 optional `style`. `components/FloorMap/floorElementStyles.ts` is the single
 source of truth for per-kind fill/stroke (same role as `spotColors.ts`).
