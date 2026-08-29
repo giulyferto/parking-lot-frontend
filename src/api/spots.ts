@@ -6,6 +6,7 @@ export interface SpotInput {
   vehicleType: VehicleType
 }
 
+/** posX/posY/width/height are meters in the floor-local plan space; rotation is degrees. */
 export interface SpotLayoutInput {
   posX: number
   posY: number

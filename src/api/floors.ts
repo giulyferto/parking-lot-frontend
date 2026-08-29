@@ -20,3 +20,19 @@ export async function createFloor(parkingLotId: string, input: FloorInput): Prom
   const { data } = await apiClient.post<Floor>(`/api/parking-lots/${parkingLotId}/floors`, input)
   return data
 }
+
+export interface RescaleResult {
+  spotsUpdated: number
+  elementsUpdated: number
+}
+
+/**
+ * Multiply every spot and floor-element coordinate on this floor by `factor`,
+ * in one backend transaction. This is how scale calibration works: there is no
+ * stored scale multiplier - coordinates are always true meters, and calibrating
+ * rewrites them once. Rare admin action.
+ */
+export async function rescaleFloor(floorId: string, factor: number): Promise<RescaleResult> {
+  const { data } = await apiClient.post<RescaleResult>(`/api/floors/${floorId}/rescale`, { factor })
+  return data
+}

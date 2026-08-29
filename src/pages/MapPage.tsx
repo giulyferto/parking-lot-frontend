@@ -3,12 +3,13 @@ import { listParkingLots } from '../api/parkingLots'
 import { listFloors } from '../api/floors'
 import { listSpots } from '../api/spots'
 import { listActiveSessions } from '../api/sessions'
+import { listFloorElements } from '../api/floorElements'
 import { FloorMap } from '../components/FloorMap/FloorMap'
 import { SpotActionPanel } from '../components/SpotActionPanel'
 import { SPOT_COLORS } from '../components/FloorMap/spotColors'
 import { field } from '../components/styles'
 import { useFloorSocket } from '../ws/useFloorSocket'
-import type { Floor, ParkingLot, ParkingSession, Spot, SpotStatus } from '../types'
+import type { Floor, FloorElement, ParkingLot, ParkingSession, Spot, SpotStatus } from '../types'
 
 /**
  * The main worker screen: pick a lot and floor, see the live-colored map,
@@ -22,6 +23,7 @@ export function MapPage() {
   const [floors, setFloors] = useState<Floor[]>([])
   const [selectedFloorId, setSelectedFloorId] = useState<string>('')
   const [spots, setSpots] = useState<Spot[]>([])
+  const [elements, setElements] = useState<FloorElement[]>([])
   const [activeSessions, setActiveSessions] = useState<ParkingSession[]>([])
   const [selectedSpot, setSelectedSpot] = useState<Spot | null>(null)
   const [loading, setLoading] = useState(false)
@@ -44,10 +46,15 @@ export function MapPage() {
   const loadFloorData = useCallback(() => {
     if (!selectedFloorId) return
     setLoading(true)
-    Promise.all([listSpots(selectedFloorId), listActiveSessions()])
-      .then(([spotData, sessionData]) => {
+    Promise.all([
+      listSpots(selectedFloorId),
+      listActiveSessions(),
+      listFloorElements(selectedFloorId),
+    ])
+      .then(([spotData, sessionData, elementData]) => {
         setSpots(spotData)
         setActiveSessions(sessionData)
+        setElements(elementData)
       })
       .finally(() => setLoading(false))
   }, [selectedFloorId])
@@ -138,7 +145,7 @@ export function MapPage() {
               <p className="p-6 font-mono text-xs uppercase tracking-[0.16em] text-slate-400">
                 Loading floor…
               </p>
-            ) : spots.length === 0 ? (
+            ) : spots.length === 0 && elements.length === 0 ? (
               <div className="flex h-full flex-col items-center justify-center gap-1 p-6 text-center">
                 <p className="text-sm font-medium text-slate-600">No bays on this floor yet</p>
                 <p className="text-sm text-slate-400">
@@ -148,7 +155,9 @@ export function MapPage() {
             ) : (
               <FloorMap
                 spots={spots}
+                elements={elements}
                 selectedSpotId={selectedSpot?.id}
+                showScaleBar
                 onSpotClick={setSelectedSpot}
               />
             )}

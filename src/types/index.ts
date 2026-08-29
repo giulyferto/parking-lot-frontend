@@ -52,11 +52,67 @@ export interface Spot {
   code: string
   vehicleType: VehicleType
   status: SpotStatus
+  // posX/posY/width/height are meters in the floor-local plan space - the same
+  // coordinate system FloorElement geometry uses (shared origin). rotation is
+  // degrees. See components/FloorMap - 1 SVG user unit renders as 1 meter.
   posX: number
   posY: number
   width: number
   height: number
   rotation: number
+}
+
+/**
+ * A non-spot thing drawn on the floor plan: the outer boundary wall, columns,
+ * interior walls, drive lanes, the street outside, entrances, text labels.
+ * One flexible list keyed by `kind` rather than a table per kind. Geometry
+ * coordinates are meters in the same floor-local space as Spot positions.
+ * Mirrors the backend's FloorElement - keep the two in sync.
+ */
+export type FloorElementKind =
+  | 'BOUNDARY' // outer wall polygon - at most one per floor
+  | 'COLUMN' // structural column
+  | 'WALL' // interior wall segment
+  | 'DRIVE_LANE' // internal drive aisle
+  | 'STREET' // public street / approach road
+  | 'ENTRANCE' // vehicle entry/exit - directed 2-point line, drawn as an arrow
+  | 'LABEL' // free-text annotation
+
+/** GeoJSON-ish geometry. `coordinates` are [x, y] pairs in meters. */
+export interface PolygonGeometry {
+  type: 'Polygon'
+  /** A single implicitly-closed ring, >= 3 vertices. */
+  coordinates: [number, number][]
+}
+export interface PolylineGeometry {
+  type: 'LineString'
+  /** >= 2 vertices. */
+  coordinates: [number, number][]
+}
+export interface PointGeometry {
+  type: 'Point'
+  coordinates: [number, number]
+}
+export type Geometry = PolygonGeometry | PolylineGeometry | PointGeometry
+
+export interface FloorElementStyle {
+  fill?: string
+  stroke?: string
+  strokeWidth?: number // screen px, drawn with vector-effect: non-scaling-stroke
+  strokeDasharray?: string
+  widthM?: number // DRIVE_LANE / STREET: real lane width in meters
+  radiusM?: number // COLUMN: radius in meters
+  label?: string // LABEL text; optional caption on any kind
+  opacity?: number // 0..1
+}
+
+export interface FloorElement {
+  id: string
+  floorId: string
+  kind: FloorElementKind
+  geometry: Geometry
+  style?: FloorElementStyle
+  z?: number // stacking order within a kind; default 0
 }
 
 export interface RatePlan {
@@ -94,7 +150,10 @@ export interface AppUser {
   role: Role
 }
 
-/** Payload pushed over /topic/floors/{floorId} - see websocket.SpotStatusMessage on the backend. */
+/**
+ * Payload pushed over /topic/floors/{floorId} - see websocket.SpotStatusMessage
+ * on the backend. Status-only; floor-plan geometry is never pushed.
+ */
 export interface SpotStatusMessage {
   spotId: string
   floorId: string

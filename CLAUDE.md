@@ -29,7 +29,8 @@ src/
 ├── api/            One file per backend resource (client.ts has the shared axios instance)
 ├── auth/           AuthContext (login/logout/current user) + ProtectedRoute
 ├── components/
-│   ├── FloorMap/   The D3 map itself + its color constants
+│   ├── FloorMap/   The D3 map + color/style constants, plan-element render
+│   │               helpers, geometry math, and the useFloorPlanEditor hook
 │   ├── Layout.tsx  Nav shell wrapping every authenticated page
 │   └── SpotActionPanel.tsx   Worker check-in/checkout forms
 ├── pages/          Route-level components (MapPage is the worker home page)
@@ -38,14 +39,38 @@ src/
 └── ws/             useFloorSocket - the WebSocket subscription hook
 ```
 
+## Coordinate model
+
+**Every coordinate stored or drawn is a meter.** `spot.posX/posY/width/
+height` and every `FloorElement` geometry coordinate live in one floor-local
+Cartesian space with a shared origin (`rotation` stays degrees). `FloorMap`
+renders 1 SVG user unit = 1 meter and lets the `viewBox` scale to fit, with
+`d3.zoom` layered on top for pan/zoom.
+
+There is no stored scale multiplier - scale is implicit in the numbers.
+Calibration is a one-shot bulk rewrite: the editor's ruler tool derives a
+`factor` and calls `POST /api/floors/{id}/rescale`, which multiplies every
+spot + element coordinate on the floor. The legacy pre-metric spot numbers
+were converted once by a backend migration.
+
+Cosmetic strokes (`spot-rect`, grid, boundary, scale bar, edit handles) use
+`vector-effect: non-scaling-stroke` so they stay crisp at any lot size or
+zoom; text/handle sizes divide a px target by `effectivePxPerMeter`
+(`clientWidth / viewBox width * zoomK`). Real-world sizes (lane width,
+column radius, grid step) stay in meters and scale.
+
 ## The FloorMap component
 
 `components/FloorMap/FloorMap.tsx` is a deliberate "React owns the
 container, D3 owns the children" component: React renders a bare `<svg>`
-once, and a `useEffect` re-runs D3's enter/update/exit data join whenever
-the `spots` prop changes (keyed by `spot.id`). Don't refactor this into
-"React renders each spot as JSX" - that fights D3's transition/drag
-machinery and is exactly the anti-pattern this structure avoids.
+skeleton once (nested `<g>` layers: `viewport` > `grid` / `hit` / `elements`
+/ `spots` / `overlay`, plus a non-zoomed `chrome` layer for the scale bar),
+and one `useEffect` re-runs D3's enter/update/exit joins whenever the inputs
+change. Don't refactor this into "React renders each spot/element as JSX" -
+that fights D3's transition/drag/zoom machinery and is exactly the
+anti-pattern this structure avoids. The editor's drawing rubber-band, vertex
+handles and calibrate ruler are also D3-drawn from props (the `editor` bag),
+not React children.
 
 - Each spot is a `<g>` positioned by `translate(posX, posY) rotate(rotation)`
   containing a centered `<rect>` (so rotation happens around the spot's own
@@ -54,8 +79,28 @@ machinery and is exactly the anti-pattern this structure avoids.
   checkout panel.
 - `onSpotDragEnd` is only passed by the admin layout editor
   (FloorEditorPage); when present, a `d3.drag()` behavior is attached and
-  drag end calls back with the new x/y, which the page persists via
+  drag end calls back with the new x/y (meters), which the page persists via
   `PATCH /api/spots/{id}/layout`.
+- `d3.zoom` (wheel zoom, drag pan) is always attached. Pan-drag is filtered
+  to `select` mode / non-editor so it never hijacks click-to-place; the
+  pointer is measured against the `<svg>` so zoom operates in meter space
+  and the transform on `g.viewport` stays consistent with `d3.pointer`.
+
+### Floor plan elements
+
+`FloorElement` (see `types/index.ts`, mirrors the backend) is one flexible
+list keyed by `kind` - `BOUNDARY` (one polygon per floor, frames the
+viewBox), `COLUMN`, `WALL`, `DRIVE_LANE`, `STREET`, `ENTRANCE`, `LABEL` -
+each with a GeoJSON-ish `geometry` (`Polygon` / `LineString` / `Point`) and
+optional `style`. `components/FloorMap/floorElementStyles.ts` is the single
+source of truth for per-kind fill/stroke (same role as `spotColors.ts`).
+`components/FloorMap/geometry.ts` holds the pure math (snap, bbox, area,
+nice scale-bar length, vertex ops); `floorElements.ts` holds the D3 render
+helper + hit-testing; `useFloorPlanEditor.ts` is the tool-mode state machine
+the FloorEditorPage feeds in as `editor`. CRUD is `api/floorElements.ts`
+(`GET/POST /api/floors/{floorId}/elements`, `PATCH/DELETE
+/api/floor-elements/{id}`). The WebSocket carries no geometry - the worker
+map only refreshes elements on floor change.
 
 ### Spot color mapping
 
@@ -117,6 +162,11 @@ exactly - keep the two in sync if either changes.
   width/height/rotation fields, but not interactive resize handles or
   multi-select - fine for placing a few dozen spots by hand, worth
   revisiting if lots get large.
+- The plan editor persists on every commit / drag-end with a full `reload()`
+  (no optimistic updates), matching the spot editor. Element style edits are
+  fire-on-blur. Polygon drawing has no mid-draw vertex dragging - finish the
+  shape, then drag its vertices in `select` mode. LABEL text on non-LABEL
+  kinds is modelled (`style.label`) but not yet rendered.
 - `MapPage` refetches the whole active-sessions list on every WebSocket
   message rather than patching a single session in place - simplest correct
   thing for an MVP-sized active list; swap for a targeted update if that
