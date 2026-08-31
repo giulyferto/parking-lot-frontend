@@ -38,6 +38,40 @@ export function polygonArea(ring: Point[]): number {
   return Math.abs(sum) / 2
 }
 
+/**
+ * Closest point to `p` on a polyline. With `closed`, the segment from the last
+ * vertex back to the first is considered too (i.e. treat `coords` as a ring).
+ * Returns the projected point and its distance from `p`.
+ */
+export function closestPointOnPath(
+  p: Point,
+  coords: Point[],
+  closed = false,
+): { point: Point; dist: number } {
+  const n = coords.length
+  if (n === 0) return { point: p, dist: Infinity }
+  if (n === 1) return { point: coords[0], dist: distance(p, coords[0]) }
+  let best = coords[0]
+  let bestD = Infinity
+  const segs = closed ? n : n - 1
+  for (let i = 0; i < segs; i++) {
+    const a = coords[i]
+    const b = coords[(i + 1) % n]
+    const dx = b[0] - a[0]
+    const dy = b[1] - a[1]
+    const len2 = dx * dx + dy * dy
+    let t = len2 === 0 ? 0 : ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2
+    t = Math.max(0, Math.min(1, t))
+    const q: Point = [a[0] + t * dx, a[1] + t * dy]
+    const d = distance(p, q)
+    if (d < bestD) {
+      bestD = d
+      best = q
+    }
+  }
+  return { point: best, dist: bestD }
+}
+
 export function polygonCentroid(ring: Point[]): Point {
   if (ring.length === 0) return [0, 0]
   let x = 0

@@ -17,6 +17,8 @@ export interface RenderContext {
   effectivePxPerMeter: number
   selectedId?: string | null
   interactive: boolean
+  /** The floor's BOUNDARY, if drawn - an ENTRANCE rectangle hugs its wall band. */
+  boundary?: FloorElement | null
 }
 
 export function pathDForGeometry(g: Geometry, close: boolean): string {
@@ -146,12 +148,64 @@ export function renderElement(
           'stroke-opacity': opacity,
         }).style('vector-effect', null)
       } else if (el.kind === 'ENTRANCE') {
-        addPath(pathDForGeometry(geom, false), {
-          fill: 'none',
-          stroke,
-          'stroke-width': selected ? strokeWidth + 1.5 : strokeWidth,
-          'marker-end': 'url(#entrance-arrow)',
-        })
+        // A real-plan opening in the perimeter wall: a thin rectangle spanning
+        // that stretch of the boundary (strokes finer than the wall), the wall
+        // band cleared inside it, captioned with an editable title + the width.
+        const [a, b] = geom.coordinates as [Point, Point]
+        const span = distance(a, b)
+        if (span > 1e-4) {
+          const bnd = ctx.boundary
+          const t = bnd?.style?.widthM ?? BOUNDARY_WALL_THICKNESS_M
+          const ux = (b[0] - a[0]) / span
+          const uy = (b[1] - a[1]) / span
+          const nx = -uy
+          const ny = ux
+          const h = t / 2
+          const rectD =
+            `M${a[0] + nx * h},${a[1] + ny * h}` +
+            `L${b[0] + nx * h},${b[1] + ny * h}` +
+            `L${b[0] - nx * h},${b[1] - ny * h}` +
+            `L${a[0] - nx * h},${a[1] - ny * h}Z`
+          // Clear the wall poché, then a hairline outline (thinner than BOUNDARY).
+          addPath(rectD, { fill: '#F8FAFC', 'fill-opacity': opacity, stroke: 'none' })
+          addPath(rectD, {
+            fill: 'none',
+            stroke,
+            'stroke-width': selected ? 1.75 : 1,
+          })
+
+          if (ctx.interactive) {
+            // Caption on the interior side so it clears the wall band.
+            let side = 1
+            if (bnd && bnd.geometry.type === 'Polygon') {
+              const c = polygonCentroid(bnd.geometry.coordinates)
+              const mx = (a[0] + b[0]) / 2
+              const my = (a[1] + b[1]) / 2
+              side = Math.sign((c[0] - mx) * nx + (c[1] - my) * ny) || 1
+            }
+            const fontM = 12 / Math.max(ctx.effectivePxPerMeter, 0.0001)
+            const cx = (a[0] + b[0]) / 2 + nx * side * (h + fontM * 1.6)
+            const cy = (a[1] + b[1]) / 2 + ny * side * (h + fontM * 1.6)
+            const caption = (dyM: number, text: string, weight: number, sizeM: number) =>
+              g
+                .append('text')
+                .attr('x', cx)
+                .attr('y', cy + dyM)
+                .attr('text-anchor', 'middle')
+                .attr('dominant-baseline', 'central')
+                .attr('font-family', '"IBM Plex Mono", ui-monospace, monospace')
+                .attr('font-size', sizeM)
+                .attr('font-weight', weight)
+                .attr('fill', selected ? EDIT_HANDLE_FILL : colors.stroke)
+                .attr('stroke', 'rgba(255,255,255,0.9)')
+                .attr('stroke-width', sizeM * 0.24)
+                .style('paint-order', 'stroke')
+                .style('pointer-events', 'none')
+                .text(text)
+            caption(-fontM * 0.72, (el.style?.label ?? 'Entrance').toUpperCase(), 700, fontM)
+            caption(fontM * 0.72, formatMeters(span), 600, fontM * 0.9)
+          }
+        }
       } else {
         addPath(pathDForGeometry(geom, false), {
           fill: 'none',

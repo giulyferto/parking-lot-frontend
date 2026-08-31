@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { FloorElement, FloorElementKind, FloorElementStyle, Geometry } from '../../types'
 import type { FloorElementInput, FloorElementPatch } from '../../api/floorElements'
 import {
+  closestPointOnPath,
   distance,
   minVertices,
   removeVertex as removeGeomVertex,
@@ -104,8 +105,20 @@ export function useFloorPlanEditor(opts: UseFloorPlanEditorOptions): FloorPlanEd
     [snapEnabled, gridStepM],
   )
 
+  // The perimeter ring, if one is drawn. An ENTRANCE is an opening *in* this
+  // wall, so its points are always projected onto it (draw preview, click,
+  // vertex drag) rather than snapped to the grid.
+  const boundaryRing = useMemo(() => {
+    const b = elements.find((e) => e.kind === 'BOUNDARY')
+    return b && b.geometry.type === 'Polygon' ? b.geometry.coordinates : null
+  }, [elements])
+
   const snapDraftPoint = useCallback(
     (worldRaw: Point): Point => {
+      // The entrance rides the perimeter wall - project, ignore grid/length snap.
+      if (tool === 'entrance') {
+        return boundaryRing ? closestPointOnPath(worldRaw, boundaryRing, true).point : worldRaw
+      }
       // Grid snap, when the user turned it on, still wins.
       if (snapEnabled && gridStepM > 0) return snapToGrid(worldRaw, gridStepM)
       // Otherwise snap the length of the segment being drawn (from the last
@@ -123,7 +136,7 @@ export function useFloorPlanEditor(opts: UseFloorPlanEditorOptions): FloorPlanEd
       const scale = snapped / len
       return [anchor[0] + dx * scale, anchor[1] + dy * scale]
     },
-    [snapEnabled, gridStepM, draft],
+    [tool, boundaryRing, snapEnabled, gridStepM, draft],
   )
 
   const setTool = useCallback((t: EditorTool) => {
@@ -174,6 +187,10 @@ export function useFloorPlanEditor(opts: UseFloorPlanEditorOptions): FloorPlanEd
       }
       const shape = TOOL_SHAPE[tool]
       if (!shape) return
+      if (tool === 'entrance' && !boundaryRing) {
+        window.alert('Draw the outer boundary first - an entrance is placed on it.')
+        return
+      }
       const existing = draft?.mode === 'shape' ? draft.vertices : []
       // Length-snap the pending point so exact segment measurements are reachable.
       const pt = snapDraftPoint(worldRaw)
@@ -196,7 +213,7 @@ export function useFloorPlanEditor(opts: UseFloorPlanEditorOptions): FloorPlanEd
       }
       setDraft({ mode: 'shape', ...shape, vertices })
     },
-    [tool, snap, snapDraftPoint, gridStepM, elements, draft, onCreate],
+    [tool, snap, snapDraftPoint, gridStepM, elements, draft, boundaryRing, onCreate],
   )
 
   const canvasDblClick = useCallback(() => commitShape(draft), [commitShape, draft])
@@ -216,9 +233,13 @@ export function useFloorPlanEditor(opts: UseFloorPlanEditorOptions): FloorPlanEd
     (id: string, vertexIndex: number, worldRaw: Point) => {
       const el = elements.find((e) => e.id === id)
       if (!el) return
-      onUpdate(id, { geometry: setVertex(el.geometry, vertexIndex, snap(worldRaw)) })
+      const landed =
+        el.kind === 'ENTRANCE' && boundaryRing
+          ? closestPointOnPath(worldRaw, boundaryRing, true).point
+          : snap(worldRaw)
+      onUpdate(id, { geometry: setVertex(el.geometry, vertexIndex, landed) })
     },
-    [elements, onUpdate, snap],
+    [elements, onUpdate, snap, boundaryRing],
   )
 
   const moveRulerEnd = useCallback((which: 0 | 1, world: Point) => {

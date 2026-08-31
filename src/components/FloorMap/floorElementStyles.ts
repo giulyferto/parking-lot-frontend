@@ -12,7 +12,7 @@ export const ELEMENT_COLORS: Record<FloorElementKind, { fill: string; stroke: st
   WALL: { fill: 'none', stroke: '#475569' }, // slate-600 interior wall
   DRIVE_LANE: { fill: '#E2E8F0', stroke: '#CBD5E1' }, // asphalt: slate-200 / slate-300 edge
   STREET: { fill: '#CBD5E1', stroke: '#94A3B8' }, // darker asphalt for the public road
-  ENTRANCE: { fill: '#2563EB', stroke: '#2563EB' }, // blue direction arrow
+  ENTRANCE: { fill: '#2563EB', stroke: '#2563EB' }, // blue opening rectangle on the boundary wall + caption
   LABEL: { fill: '#0F172A', stroke: 'rgba(255,255,255,0.85)' }, // text + halo
 }
 
@@ -46,7 +46,6 @@ export const BOUNDARY_WALL_THICKNESS_M = 0.3 // exterior perimeter wall poché b
 export const LANE_DEFAULT_WIDTH_M = 6
 export const STREET_DEFAULT_WIDTH_M = 7
 export const COLUMN_DEFAULT_RADIUS_M = 0.3
-export const ENTRANCE_ARROW_LEN_M = 3
 
 // Editor / map chrome.
 export const GRID_STROKE = 'rgba(148,163,184,0.35)' // slate-400 @ low alpha
@@ -57,5 +56,5 @@ export const RUBBER_BAND_STROKE = '#2563EB'
 export const RULER_STROKE = '#2563EB'
 // Wheel-zoom range [min k, max k]. min 0.1 = zoom out to ~10x the fitted view
 // (on a near-empty floor, whose viewBox is clamped to MIN_VIEW_W_M, that's
-// ~240 m across - enough to lay out a whole lot before any boundary exists).
+// ~460 m across - enough to lay out a whole lot before any boundary exists).
 export const ZOOM_SCALE_EXTENT: [number, number] = [0.1, 20]

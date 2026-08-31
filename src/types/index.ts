@@ -75,7 +75,7 @@ export type FloorElementKind =
   | 'WALL' // interior wall segment
   | 'DRIVE_LANE' // internal drive aisle
   | 'STREET' // public street / approach road
-  | 'ENTRANCE' // vehicle entry/exit - directed 2-point line, drawn as an arrow
+  | 'ENTRANCE' // vehicle entry/exit - 2-point line on the BOUNDARY, drawn as an opening rectangle in the wall
   | 'LABEL' // free-text annotation
 
 /** GeoJSON-ish geometry. `coordinates` are [x, y] pairs in meters. */

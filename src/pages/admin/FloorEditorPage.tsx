@@ -46,8 +46,10 @@ import type { Floor, FloorElement, RatePlan, Spot, SpotStatus, VehicleType } fro
 
 const VEHICLE_TYPES: VehicleType[] = ['CAR', 'MOTORCYCLE', 'EV', 'HANDICAP']
 
+// `select` is not in this strip - it's the floating arrow button pinned to the
+// floor plan itself (see SelectHandle), so the default/idle tool sits on the
+// canvas the way it does in a drawing app, not in the row of draw tools.
 const TOOLS: Array<[EditorTool, string]> = [
-  ['select', 'Select'],
   ['boundary', 'Boundary'],
   ['column', 'Column'],
   ['wall', 'Wall'],
@@ -65,7 +67,7 @@ const TOOL_HINT: Record<EditorTool, string> = {
   lane: 'Click along the aisle · press Enter to finish · Esc cancels',
   street: 'Click along the road · press Enter to finish · Esc cancels',
   column: 'Click to drop a column',
-  entrance: 'Click the two ends of the entrance (arrow points at the 2nd)',
+  entrance: 'Draw the boundary first · then click the two ends of the opening — it snaps onto the wall',
   spotRow: 'Click the two ends of the row along the aisle, then set it up on the right · Esc cancels',
   calibrate: 'Click two points across a distance you know, then enter it on the right',
 }
@@ -268,7 +270,7 @@ export function FloorEditorPage() {
               {TOOL_HINT[editor.tool]}
             </p>
           )}
-          <div className="deck-grid h-full min-h-[24rem] w-full overflow-hidden rounded-xl border border-slate-200 md:min-h-0">
+          <div className="deck-grid relative h-full min-h-[24rem] w-full overflow-hidden rounded-xl border border-slate-200 md:min-h-0">
             {spots.length === 0 && elements.length === 0 && editor.tool === 'select' ? (
               <div className="flex h-full flex-col items-center justify-center gap-1 p-6 text-center">
                 <p className="text-sm font-medium text-slate-600">Empty floor</p>
@@ -277,19 +279,26 @@ export function FloorEditorPage() {
                 </p>
               </div>
             ) : (
-              <FloorMap
-                spots={spots}
-                elements={elements}
-                selectedSpotId={selectedSpot?.id}
-                showGrid={showGrid}
-                showScaleBar={showScaleBar}
-                gridStepM={gridStepM}
-                fitToken={fitToken}
-                editor={editor}
-                spotRowTool={spotRow}
-                onSpotClick={setSelectedSpot}
-                onSpotDragEnd={handleDragEnd}
-              />
+              <>
+                <FloorMap
+                  spots={spots}
+                  elements={elements}
+                  selectedSpotId={selectedSpot?.id}
+                  showGrid={showGrid}
+                  showScaleBar={showScaleBar}
+                  gridStepM={gridStepM}
+                  fitToken={fitToken}
+                  editor={editor}
+                  spotRowTool={spotRow}
+                  onSpotClick={setSelectedSpot}
+                  onSpotDragEnd={handleDragEnd}
+                />
+                <SelectHandle
+                  active={editor.tool === 'select'}
+                  editing={editor.tool === 'select' && editor.selectedElementId != null}
+                  onClick={() => editor.setTool('select')}
+                />
+              </>
             )}
           </div>
         </div>
@@ -375,6 +384,54 @@ function ToolStrip({
         Fit
       </button>
     </div>
+  )
+}
+
+/**
+ * The idle "select / move" tool, pinned to the floor plan itself (top-left)
+ * rather than sitting in the row of draw tools. Clicking it is exactly
+ * `editor.setTool('select')`. Three looks:
+ *   - blue          : select tool active, nothing picked - idle, ready to select
+ *   - black outline  : an element is picked, so you're editing/moving it (edit mode on)
+ *   - muted          : a draw tool is active, select is off
+ */
+function SelectHandle({
+  active,
+  editing,
+  onClick,
+}: {
+  active: boolean
+  editing: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title="Select / move"
+      aria-label="Select / move"
+      aria-pressed={active}
+      className={`absolute left-3 top-3 z-10 flex h-9 w-9 items-center justify-center rounded-lg border shadow-sm transition-colors ${
+        editing
+          ? 'border-slate-900 bg-white/95 text-slate-900 ring-1 ring-slate-900'
+          : active
+            ? 'border-blue-300 bg-blue-50 text-blue-700'
+            : 'border-slate-200 bg-white/95 text-slate-600 hover:bg-slate-50'
+      }`}
+    >
+      <svg
+        viewBox="0 0 24 24"
+        className="h-4 w-4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M4.037 4.688a.495.495 0 0 1 .651-.651l16 6.5a.5.5 0 0 1-.063.947l-6.124 1.58a2 2 0 0 0-1.438 1.435l-1.579 6.126a.5.5 0 0 1-.947.063z" />
+      </svg>
+    </button>
   )
 }
 
@@ -612,12 +669,13 @@ function SelectedElementEditor({
             />
           </label>
         )}
-        {element.kind === 'LABEL' && (
+        {(element.kind === 'LABEL' || element.kind === 'ENTRANCE') && (
           <label className="block">
-            <span className={microLabel}>Text</span>
+            <span className={microLabel}>{element.kind === 'ENTRANCE' ? 'Title' : 'Text'}</span>
             <input
               type="text"
               defaultValue={element.style?.label ?? ''}
+              placeholder={element.kind === 'ENTRANCE' ? 'Entrance' : undefined}
               onBlur={(e) => editor.updateSelectedStyle({ label: e.target.value })}
               className={`${field} px-2 py-1.5`}
             />

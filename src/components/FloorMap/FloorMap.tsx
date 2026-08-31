@@ -3,8 +3,6 @@ import * as d3 from 'd3'
 import type { FloorElement, Spot } from '../../types'
 import { SPOT_COLORS, SPOT_LABEL_COLOR, SPOT_SELECTED_STROKE, SPOT_STROKE } from './spotColors'
 import {
-  ELEMENT_COLORS,
-  ENTRANCE_ARROW_LEN_M,
   EDIT_HANDLE_FILL,
   EDIT_HANDLE_RADIUS_PX,
   GRID_STROKE,
@@ -19,6 +17,7 @@ import {
   distance,
   formatMeters,
   niceScaleBarLength,
+  setVertex,
   unionBbox,
   type Bbox,
   type Point,
@@ -28,9 +27,9 @@ import { renderElement } from './floorElements'
 import type { FloorPlanEditorBag } from './useFloorPlanEditor'
 import type { SpotRowToolBag } from './useSpotRowTool'
 
-const PADDING_M = 2
-const MIN_VIEW_W_M = 20
-const MIN_VIEW_H_M = 14
+const PADDING_M = 3
+const MIN_VIEW_W_M = 40
+const MIN_VIEW_H_M = 28
 
 interface ViewBox {
   x: number
@@ -97,7 +96,12 @@ export function FloorMap({
     const svgEl = svgRef.current
     if (!svgEl) return
     const svg = d3.select(svgEl)
-    const els = elements ?? []
+    // Paint order: BOUNDARY first (the frame), then the rest, then ENTRANCE and
+    // LABEL on top - an entrance rectangle has to paint over the wall band, and
+    // labels should never be buried. Array#sort is stable, so ties keep order.
+    const paintRank = (k: FloorElement['kind']) =>
+      k === 'BOUNDARY' ? 0 : k === 'ENTRANCE' ? 2 : k === 'LABEL' ? 3 : 1
+    const els = (elements ?? []).slice().sort((a, b) => paintRank(a.kind) - paintRank(b.kind))
     const selectMode = !editor || editor.tool === 'select'
     const step = gridStepM && gridStepM > 0 ? gridStepM : 5
 
@@ -287,12 +291,29 @@ export function FloorMap({
           .style('vector-effect', 'non-scaling-stroke')
           .style('pointer-events', 'all')
           .style('cursor', 'pointer')
+        // While a vertex is dragged, re-render the element itself (not just the
+        // handle) from a geometry with that vertex moved, so the connected edges
+        // and their live dimension labels follow the cursor instead of snapping
+        // into place only on drop.
+        const elLayer = viewport.select<SVGGElement>('g.elements')
+        const renderLive = (geom: typeof sel.geometry) =>
+          elLayer
+            .selectAll<SVGGElement, FloorElement>('g.element')
+            .filter((d) => d.id === sel.id)
+            .datum({ ...sel, geometry: geom })
+            .call(renderElement, {
+              effectivePxPerMeter: viewToPx * k,
+              selectedId: sel.id,
+              interactive: true,
+              boundary,
+            })
         const vertexDrag = d3
           .drag<SVGCircleElement, { c: Point; i: number }>()
           .container(dragContainer)
           .on('start', (event) => event.sourceEvent.stopPropagation())
-          .on('drag', function (event) {
+          .on('drag', function (event, h) {
             d3.select(this).attr('cx', event.x).attr('cy', event.y)
+            renderLive(setVertex(sel.geometry, isPoint ? 0 : h.i, [event.x, event.y]))
           })
           .on('end', (event, h) => editor.endVertexDrag(sel.id, isPoint ? 0 : h.i, [event.x, event.y]))
         handles.call(vertexDrag)
@@ -484,6 +505,7 @@ export function FloorMap({
       effectivePxPerMeter: viewToPx * k0,
       selectedId: editor?.selectedElementId,
       interactive: !!editor,
+      boundary,
     })
     if (editor && editor.tool === 'select') {
       elMerged.style('cursor', 'move').on('click', (event, d) => {
@@ -689,18 +711,6 @@ export function FloorMap({
         <filter id="spot-shadow" x="-30%" y="-30%" width="160%" height="160%">
           <feDropShadow dx="0" dy="0.05" stdDeviation="0.06" floodColor="#0f172a" floodOpacity="0.14" />
         </filter>
-        <marker
-          id="entrance-arrow"
-          viewBox="0 0 10 10"
-          markerUnits="userSpaceOnUse"
-          markerWidth={ENTRANCE_ARROW_LEN_M}
-          markerHeight={ENTRANCE_ARROW_LEN_M}
-          refX="7.5"
-          refY="5"
-          orient="auto"
-        >
-          <path d="M0,0 L10,5 L0,10 Z" fill={ELEMENT_COLORS.ENTRANCE.fill} />
-        </marker>
         <pattern id="meter-grid" patternUnits="userSpaceOnUse" width={5} height={5}>
           <path
             className="grid-cell"
