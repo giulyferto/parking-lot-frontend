@@ -265,11 +265,6 @@ export function FloorEditorPage() {
             onFit={() => setFitToken((n) => n + 1)}
             boundaryExists={boundaryExists}
           />
-          {editor.tool !== 'select' && (
-            <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-slate-400">
-              {TOOL_HINT[editor.tool]}
-            </p>
-          )}
           <div className="deck-grid relative h-full min-h-[24rem] w-full overflow-hidden rounded-xl border border-slate-200 md:min-h-0">
             {spots.length === 0 && elements.length === 0 && editor.tool === 'select' ? (
               <div className="flex h-full flex-col items-center justify-center gap-1 p-6 text-center">
@@ -300,6 +295,7 @@ export function FloorEditorPage() {
                 />
               </>
             )}
+            <ToolHint tool={editor.tool} />
           </div>
         </div>
 
@@ -384,6 +380,63 @@ function ToolStrip({
         Fit
       </button>
     </div>
+  )
+}
+
+/**
+ * Contextual instruction bar for the active draw tool. Pinned to the top of the
+ * floor plan (not stacked above it) so switching tools never reflows the canvas,
+ * and `pointer-events-none` so it never eats a click meant for the map. It stays
+ * mounted and fades/slides between states; we keep drawing the last real tool's
+ * text so it doesn't blank out mid-fade when you drop back to `select`.
+ */
+function ToolHint({ tool }: { tool: EditorTool }) {
+  const visible = tool !== 'select'
+  // Keep rendering the last non-idle tool while fading out (React's documented
+  // "adjust state during render" pattern - cheaper than an effect, no flash of
+  // empty text when `tool` flips back to `select`).
+  const [shown, setShown] = useState<EditorTool>(visible ? tool : 'boundary')
+  if (visible && tool !== shown) setShown(tool)
+
+  const label = TOOLS.find(([value]) => value === shown)?.[1] ?? ''
+  const steps = TOOL_HINT[shown].split('·').map((s) => s.trim())
+
+  return (
+    <div
+      role="status"
+      aria-hidden={!visible}
+      className={`pointer-events-none absolute inset-x-0 top-3 z-10 flex justify-center px-3 transition duration-200 ease-out ${
+        visible ? 'translate-y-0 opacity-100' : '-translate-y-1 opacity-0'
+      }`}
+    >
+      <div className="flex max-w-full flex-wrap items-center justify-center gap-x-2 gap-y-1 rounded-xl border border-slate-200 bg-white/90 px-3 py-1.5 text-[11px] leading-snug text-slate-600 shadow-sm backdrop-blur">
+        <span className="font-mono font-semibold uppercase tracking-[0.14em] text-blue-700">
+          {label}
+        </span>
+        {steps.map((step, i) => (
+          <span key={i} className="flex items-center gap-2">
+            {i > 0 && <span className="text-slate-300">/</span>}
+            <span>{renderHintStep(step)}</span>
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// Wrap key names in <kbd> so "press Enter" / "Esc cancels" read as keys, not prose.
+function renderHintStep(step: string) {
+  return step.split(/\b(Enter|Esc)\b/).map((chunk, i) =>
+    chunk === 'Enter' || chunk === 'Esc' ? (
+      <kbd
+        key={i}
+        className="rounded border border-slate-300 bg-slate-50 px-1 font-mono text-[10px] text-slate-500"
+      >
+        {chunk}
+      </kbd>
+    ) : (
+      <span key={i}>{chunk}</span>
+    ),
   )
 }
 
