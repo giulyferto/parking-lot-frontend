@@ -190,15 +190,19 @@ export function FloorEditorPage() {
     [floorId, spots.length, reload],
   )
 
-  const existingCodes = useMemo(() => new Set(spots.map((s) => s.code)), [spots])
-
-  // The "Parking row" tool hands us its computed placements; persist them one by
-  // one (create + layout), sequentially so codes land in order and a mid-row
-  // failure is easy to reason about. A bulk endpoint is the eventual fix.
+  // The "Parking row" tool commits as soon as the baseline is drawn, then
+  // recommits (delete previous + create next) whenever it's adjusted -
+  // `previousIds` is whatever it created last time (empty for a fresh row).
+  // Deletes go first so a code reused across the edit doesn't 409 against its
+  // own prior spot. Creates run sequentially so codes land in order and a
+  // mid-row failure is easy to reason about. A bulk endpoint is the eventual fix.
   const handleCommitRow = useCallback(
-    async (placements: SpotRowPlacement[]) => {
-      if (!floorId) return
-      let ok = 0
+    async (placements: SpotRowPlacement[], previousIds: string[]): Promise<string[]> => {
+      if (!floorId) return []
+      if (previousIds.length) {
+        await Promise.all(previousIds.map((id) => deleteSpot(id).catch(() => {})))
+      }
+      const createdIds: string[] = []
       const failed: string[] = []
       for (const p of placements) {
         try {
@@ -211,8 +215,8 @@ export function FloorEditorPage() {
               height: p.height,
               rotation: p.rotation,
             })
+            createdIds.push(created.id)
           }
-          ok += 1
         } catch {
           failed.push(p.code)
         }
@@ -220,17 +224,23 @@ export function FloorEditorPage() {
       reload()
       if (failed.length) {
         window.alert(
-          `Created ${ok} of ${placements.length} bays. Failed (duplicate code?): ${failed.join(', ')}.`,
+          `Created ${createdIds.length} of ${placements.length} bays. Failed (duplicate code?): ${failed.join(', ')}.`,
         )
       }
+      return createdIds
     },
     [floorId, reload],
   )
+
+  // All spot codes currently on the floor; useSpotRowTool excludes this row's
+  // own just-committed codes internally so a row doesn't "clash" with itself.
+  const existingCodes = useMemo(() => new Set(spots.map((s) => s.code)), [spots])
 
   const spotRow = useSpotRowTool({
     active: editor.tool === 'spotRow',
     gridStepM: snapEnabled ? gridStepM : 0,
     snapEnabled,
+    existingCodes,
     onCommitRow: handleCommitRow,
   })
 
@@ -315,7 +325,7 @@ export function FloorEditorPage() {
           <hr className="border-slate-100" />
           {editor.tool === 'spotRow' && (
             <>
-              <SpotRowPanel tool={spotRow} onDone={() => editor.setTool('select')} existingCodes={existingCodes} />
+              <SpotRowPanel tool={spotRow} onDone={() => editor.setTool('select')} />
               <hr className="border-slate-100" />
             </>
           )}
@@ -770,16 +780,13 @@ function hexOr(value: string | undefined, fallback: string): string {
 function SpotRowPanel({
   tool,
   onDone,
-  existingCodes,
 }: {
   tool: SpotRowToolBag
   onDone: () => void
-  existingCodes: Set<string>
 }) {
-  const { params, placements } = tool
+  const { params, placements, clash } = tool
   const sinPhi = Math.max(Math.sin((params.angleDeg * Math.PI) / 180), 1e-3)
   const pitch = params.stallWidthM / sinPhi
-  const clash = placements.filter((p) => existingCodes.has(p.code))
   const first = placements[0]?.code
   const last = placements[placements.length - 1]?.code
   const num = (raw: string) => (raw === '' ? 0 : Number(raw))
@@ -790,8 +797,9 @@ function SpotRowPanel({
 
       {tool.phase === 'idle' && (
         <p className="mb-3 text-xs leading-relaxed text-slate-500">
-          Click the two ends of the row along the aisle on the plan. Drag the endpoints afterwards to
-          fine-tune.
+          Click the two ends of the row along the aisle on the plan - the bays are created as soon as
+          the second click lands. Drag an endpoint afterwards to reposition the row, or tweak the
+          fields below and press Update.
         </p>
       )}
 
@@ -967,35 +975,42 @@ function SpotRowPanel({
           <p className="text-slate-400">Draw a baseline to preview the row.</p>
         )}
         {clash.length > 0 && (
-          <p className="mt-1 font-semibold text-red-600">
-            Codes already in use: {clash.map((p) => p.code).join(', ')}
+          <p className="mt-1 font-semibold text-amber-600">
+            Codes already in use: {clash.map((p) => p.code).join(', ')} - the code start will
+            auto-advance past them when this saves.
           </p>
         )}
       </div>
 
       <div className="mt-3 flex gap-2">
+        {tool.committed && (
+          <button
+            type="button"
+            disabled={tool.phase !== 'ready' || tool.busy || placements.length === 0}
+            onClick={() => void tool.applyChanges()}
+            className={`${btn.primary} flex-1`}
+          >
+            {tool.busy ? 'Updating…' : `Update ${placements.length || ''} ${placements.length === 1 ? 'bay' : 'bays'}`}
+          </button>
+        )}
         <button
           type="button"
-          disabled={
-            tool.phase !== 'ready' || tool.busy || placements.length === 0 || clash.length > 0
-          }
-          onClick={async () => {
-            await tool.generate()
-            onDone()
-          }}
-          className={`${btn.primary} flex-1`}
+          disabled={tool.busy}
+          onClick={onDone}
+          className={tool.committed ? btn.ghost : `${btn.primary} flex-1`}
         >
-          {tool.busy ? 'Creating…' : `Generate ${placements.length || ''} ${placements.length === 1 ? 'bay' : 'bays'}`}
+          Done
         </button>
         <button
           type="button"
-          onClick={() => {
-            tool.cancel()
+          disabled={tool.busy}
+          onClick={async () => {
+            await tool.cancel()
             onDone()
           }}
           className={btn.ghost}
         >
-          Cancel
+          {tool.committed ? 'Delete row' : 'Cancel'}
         </button>
       </div>
     </div>

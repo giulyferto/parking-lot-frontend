@@ -39,11 +39,19 @@ export interface SpotRowToolBag {
   capacity: number
   /** Unused baseline length after the placed stalls, meters. */
   leftoverM: number
+  /** True once the row has been persisted (the second click has fired). */
+  committed: boolean
+  /** Ids of the spots this row currently has persisted (empty before the second click). */
+  committedIds: string[]
+  /** Placements whose code collides with a spot elsewhere on the floor - blocks auto-commit. */
+  clash: SpotRowPlacement[]
   canvasClick: (world: Point) => void
   handlePointerMove: (world: Point) => void
   moveBaselineEnd: (which: 0 | 1, world: Point) => void
-  generate: () => Promise<void>
-  cancel: () => void
+  /** Re-persists the current placements (e.g. after tweaking angle/count/etc). */
+  applyChanges: () => Promise<void>
+  /** Deletes any bays already persisted for this row and resets the tool. */
+  cancel: () => Promise<void>
   busy: boolean
 }
 
@@ -59,7 +67,7 @@ const DEFAULT_PARAMS: SpotRowParams = {
   stallDepthM: STALL_DIMENSIONS_BY_VEHICLE.CAR.height,
   vehicleType: 'CAR',
   count: 10,
-  autoFill: false,
+  autoFill: true,
   side: 'left',
   flip: false,
   codePrefix: '',
@@ -67,11 +75,67 @@ const DEFAULT_PARAMS: SpotRowParams = {
   codePad: 2,
 }
 
+function buildPlacements(p0: Point, p1: Point, params: SpotRowParams): SpotRowPlacement[] {
+  const capacity = spotRowCapacity(p0, p1, params.angleDeg, params.stallWidthM)
+  const count = params.autoFill ? Math.max(1, capacity) : Math.max(0, Math.floor(params.count))
+  return computeSpotRow({
+    p0,
+    p1,
+    angleDeg: params.angleDeg,
+    stallWidthM: params.stallWidthM,
+    stallDepthM: params.stallDepthM,
+    count,
+    side: params.side,
+    flip: params.flip,
+    codePrefix: params.codePrefix,
+    codeStart: Math.floor(params.codeStart) || 1,
+    codePad: Math.max(0, Math.floor(params.codePad)),
+    vehicleType: params.vehicleType,
+  })
+}
+
+function clashesWith(
+  placements: SpotRowPlacement[],
+  existingCodes: Set<string>,
+  committedCodes: Set<string>,
+): boolean {
+  return placements.some((p) => existingCodes.has(p.code) && !committedCodes.has(p.code))
+}
+
+/**
+ * Finds a codeStart that doesn't collide with anything already on the floor,
+ * starting from the current one - e.g. a floor already numbered 01-11 (built
+ * before this row tool ever touched it) shouldn't block a first row that
+ * defaults to codeStart 1. Jumps forward by a full row's worth of codes each
+ * try, since a real clash is almost always a contiguous block used by other
+ * spots, not a scattered handful.
+ */
+function resolveCodeStart(
+  p0: Point,
+  p1: Point,
+  params: SpotRowParams,
+  existingCodes: Set<string>,
+  committedCodes: Set<string>,
+): { placements: SpotRowPlacement[]; codeStart: number; ok: boolean } {
+  let codeStart = Math.floor(params.codeStart) || 1
+  for (let attempt = 0; attempt < 500; attempt++) {
+    const placements = buildPlacements(p0, p1, { ...params, codeStart })
+    if (placements.length === 0 || !clashesWith(placements, existingCodes, committedCodes)) {
+      return { placements, codeStart, ok: true }
+    }
+    codeStart += placements.length
+  }
+  return { placements: buildPlacements(p0, p1, { ...params, codeStart }), codeStart, ok: false }
+}
+
 /**
  * State machine for the "Parking row" editor tool. Mirrors the ruler draft in
  * useFloorPlanEditor: first click drops p0, the pointer drags p1 live, the
- * second click freezes the baseline, then "generate" hands the computed
- * placements to the page to persist (createSpot + updateSpotLayout per stall).
+ * second click freezes the baseline and immediately persists the row
+ * (createSpot + updateSpotLayout per stall). The row stays selected afterward
+ * (draggable endpoints, editable params) - dragging an endpoint or pressing
+ * "Update" deletes the previously persisted bays and recreates them from the
+ * new geometry, so `onCommitRow` always replaces whatever it created last.
  *
  * Kept separate from useFloorPlanEditor because bays are a different entity from
  * FloorElements with their own persistence path. The active-tool flag still
@@ -81,12 +145,19 @@ export function useSpotRowTool(opts: {
   active: boolean
   gridStepM: number
   snapEnabled: boolean
-  onCommitRow: (placements: SpotRowPlacement[]) => Promise<void>
+  /** All spot codes currently on the floor (including this row's own persisted bays). */
+  existingCodes: Set<string>
+  onCommitRow: (placements: SpotRowPlacement[], previousIds: string[]) => Promise<string[]>
 }): SpotRowToolBag {
-  const { active, gridStepM, snapEnabled, onCommitRow } = opts
+  const { active, gridStepM, snapEnabled, existingCodes, onCommitRow } = opts
 
   const [params, setParamsState] = useState<SpotRowParams>(DEFAULT_PARAMS)
   const [draft, setDraft] = useState<Draft | null>(null)
+  const [committedIds, setCommittedIds] = useState<string[]>([])
+  // Codes from this row's own last successful commit - `existingCodes` still
+  // contains them (until the parent's next reload), but a code the row is
+  // about to replace with itself isn't a real clash.
+  const [committedCodes, setCommittedCodes] = useState<Set<string>>(new Set())
   const [busy, setBusy] = useState(false)
 
   const snap = useCallback(
@@ -107,15 +178,48 @@ export function useSpotRowTool(opts: {
     })
   }, [])
 
+  // Deletes whatever this row last persisted (if anything) and creates
+  // `nextPlacements` in its place, tracking the freshly created ids.
+  const persist = useCallback(
+    async (nextPlacements: SpotRowPlacement[]) => {
+      setBusy(true)
+      try {
+        const ids = await onCommitRow(nextPlacements, committedIds)
+        setCommittedIds(ids)
+        setCommittedCodes(new Set(nextPlacements.map((p) => p.code)))
+      } finally {
+        setBusy(false)
+      }
+    },
+    [onCommitRow, committedIds],
+  )
+
   const canvasClick = useCallback(
     (world: Point) => {
       const p = snap(world)
-      setDraft((prev) => {
-        if (!prev || prev.complete) return { p0: p, p1: p, complete: false }
-        return { p0: prev.p0, p1: p, complete: true }
-      })
+      if (!draft || draft.complete) {
+        // Starting a fresh row after a committed one - advance codeStart past
+        // it so the new row's default codes don't collide with what the last
+        // one just claimed (they'd otherwise both start from the same number).
+        if (committedIds.length > 0) {
+          const bumped = committedIds.length
+          setParamsState((prev) => ({ ...prev, codeStart: prev.codeStart + bumped }))
+        }
+        setCommittedIds([])
+        setCommittedCodes(new Set())
+        setDraft({ p0: p, p1: p, complete: false })
+        return
+      }
+      setDraft({ p0: draft.p0, p1: p, complete: true })
+      const resolved = resolveCodeStart(draft.p0, p, params, existingCodes, committedCodes)
+      if (resolved.codeStart !== params.codeStart) {
+        setParamsState((prev) => ({ ...prev, codeStart: resolved.codeStart }))
+      }
+      // A real (unresolvable) clash would just 500 per-item; leave it
+      // uncommitted so the clash warning is the first thing the user sees.
+      if (resolved.ok) void persist(resolved.placements)
     },
-    [snap],
+    [snap, draft, params, persist, existingCodes, committedCodes, committedIds],
   )
 
   const handlePointerMove = useCallback(
@@ -127,16 +231,23 @@ export function useSpotRowTool(opts: {
 
   const moveBaselineEnd = useCallback(
     (which: 0 | 1, world: Point) => {
+      if (!draft) return
       const p = snap(world)
-      setDraft((prev) => {
-        if (!prev) return prev
-        return which === 0 ? { ...prev, p0: p } : { ...prev, p1: p }
-      })
+      const next = which === 0 ? { ...draft, p0: p } : { ...draft, p1: p }
+      setDraft(next)
+      // Only a completed row is draggable (see FloorMap), so this always
+      // means "reposition the already-persisted row" - recommit in place,
+      // unless the new geometry lands on a colliding code (see canvasClick).
+      if (draft.complete) {
+        const resolved = resolveCodeStart(next.p0, next.p1, params, existingCodes, committedCodes)
+        if (resolved.codeStart !== params.codeStart) {
+          setParamsState((prev) => ({ ...prev, codeStart: resolved.codeStart }))
+        }
+        if (resolved.ok) void persist(resolved.placements)
+      }
     },
-    [snap],
+    [snap, draft, params, persist, existingCodes, committedCodes],
   )
-
-  const cancel = useCallback(() => setDraft(null), [])
 
   const baseline = useMemo(
     () => (draft ? { p0: draft.p0, p1: draft.p1 } : null),
@@ -153,24 +264,15 @@ export function useSpotRowTool(opts: {
     [baseline, params.angleDeg, params.stallWidthM],
   )
 
-  const placements = useMemo(() => {
-    if (!baseline) return []
-    const count = params.autoFill ? Math.max(1, capacity) : Math.max(0, Math.floor(params.count))
-    return computeSpotRow({
-      p0: baseline.p0,
-      p1: baseline.p1,
-      angleDeg: params.angleDeg,
-      stallWidthM: params.stallWidthM,
-      stallDepthM: params.stallDepthM,
-      count,
-      side: params.side,
-      flip: params.flip,
-      codePrefix: params.codePrefix,
-      codeStart: Math.floor(params.codeStart) || 1,
-      codePad: Math.max(0, Math.floor(params.codePad)),
-      vehicleType: params.vehicleType,
-    })
-  }, [baseline, capacity, params])
+  const placements = useMemo(
+    () => (baseline ? buildPlacements(baseline.p0, baseline.p1, params) : []),
+    [baseline, params],
+  )
+
+  const clash = useMemo(
+    () => placements.filter((p) => existingCodes.has(p.code) && !committedCodes.has(p.code)),
+    [placements, existingCodes, committedCodes],
+  )
 
   const leftoverM = useMemo(() => {
     if (!baseline) return 0
@@ -179,34 +281,55 @@ export function useSpotRowTool(opts: {
     return Math.max(0, distance(baseline.p0, baseline.p1) - placements.length * pitch)
   }, [baseline, params.angleDeg, params.stallWidthM, placements.length])
 
-  const generate = useCallback(async () => {
-    if (busy || placements.length === 0) return
-    setBusy(true)
-    try {
-      await onCommitRow(placements)
-    } finally {
-      setBusy(false)
-      setDraft(null)
+  // For post-hoc param tweaks (angle, count, stall size, side, ...) that don't
+  // move the baseline - those don't recommit on every keystroke, so this is an
+  // explicit "push the current preview" action.
+  const applyChanges = useCallback(async () => {
+    if (busy || !baseline || placements.length === 0) return
+    const resolved = resolveCodeStart(baseline.p0, baseline.p1, params, existingCodes, committedCodes)
+    if (resolved.codeStart !== params.codeStart) {
+      setParamsState((prev) => ({ ...prev, codeStart: resolved.codeStart }))
     }
-  }, [busy, placements, onCommitRow])
+    if (resolved.ok) await persist(resolved.placements)
+  }, [busy, baseline, placements, params, existingCodes, committedCodes, persist])
+
+  const cancel = useCallback(async () => {
+    if (busy) return
+    if (committedIds.length) {
+      setBusy(true)
+      try {
+        await onCommitRow([], committedIds)
+      } finally {
+        setBusy(false)
+      }
+    }
+    setCommittedIds([])
+    setCommittedCodes(new Set())
+    setDraft(null)
+  }, [busy, committedIds, onCommitRow])
 
   // Leaving the tool (or the editor switching tools) clears any half-drawn row
-  // so a stale start point can't be reused on the next activation. Same
-  // tool-change-reset shape as MapPage's floor-change reset (an accepted
-  // set-state-in-effect in this codebase).
+  // so a stale start point can't be reused on the next activation. Whatever was
+  // already persisted stays on the floor - only the explicit Cancel path
+  // deletes bays. Same tool-change-reset shape as MapPage's floor-change reset
+  // (an accepted set-state-in-effect in this codebase).
   useEffect(() => {
-    if (!active) setDraft(null)
+    if (!active) {
+      setDraft(null)
+      setCommittedIds([])
+      setCommittedCodes(new Set())
+    }
   }, [active])
 
-  // Esc cancels the current baseline while the tool is active.
+  // Esc aborts the current row, deleting anything it already persisted.
   useEffect(() => {
     if (!active || !draft) return
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key === 'Escape') setDraft(null)
+      if (e.key === 'Escape') void cancel()
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [active, draft])
+  }, [active, draft, cancel])
 
   return useMemo(
     () => ({
@@ -218,10 +341,13 @@ export function useSpotRowTool(opts: {
       placements,
       capacity,
       leftoverM,
+      committed: committedIds.length > 0,
+      committedIds,
+      clash,
       canvasClick,
       handlePointerMove,
       moveBaselineEnd,
-      generate,
+      applyChanges,
       cancel,
       busy,
     }),
@@ -234,10 +360,12 @@ export function useSpotRowTool(opts: {
       placements,
       capacity,
       leftoverM,
+      committedIds,
+      clash,
       canvasClick,
       handlePointerMove,
       moveBaselineEnd,
-      generate,
+      applyChanges,
       cancel,
       busy,
     ],
