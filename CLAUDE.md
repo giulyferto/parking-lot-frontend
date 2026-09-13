@@ -158,6 +158,11 @@ exactly - keep the two in sync if either changes.
 - Forms are uncontrolled-enough plain `useState` + `onSubmit` - no form
   library. Introduce one (react-hook-form, etc.) only if forms get
   meaningfully more complex than what's here.
+- Don't add code comments by default. Only write one when it captures
+  something the code itself can't - a non-obvious constraint, a subtle
+  invariant, a workaround for a specific bug, or behavior that would
+  surprise a reader. Never comment on *what* the code does (good naming
+  already covers that).
 
 ## Known simplifications / likely next steps
 
