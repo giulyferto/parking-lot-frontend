@@ -52,6 +52,13 @@ export interface SpotRowToolBag {
   applyChanges: () => Promise<void>
   /** Deletes any bays already persisted for this row and resets the tool. */
   cancel: () => Promise<void>
+  /**
+   * Clears the local draft/baseline/committed-ids without touching the
+   * backend - for when the bays were already removed by something outside
+   * the tool (a Cmd+Z undoing this same row session), so the preview outline
+   * doesn't linger over bays that no longer exist.
+   */
+  resetSession: () => void
   busy: boolean
 }
 
@@ -308,6 +315,12 @@ export function useSpotRowTool(opts: {
     setDraft(null)
   }, [busy, committedIds, onCommitRow])
 
+  const resetSession = useCallback(() => {
+    setDraft(null)
+    setCommittedIds([])
+    setCommittedCodes(new Set())
+  }, [])
+
   // Leaving the tool (or the editor switching tools) clears any half-drawn row
   // so a stale start point can't be reused on the next activation. Whatever was
   // already persisted stays on the floor - only the explicit Cancel path
@@ -349,6 +362,7 @@ export function useSpotRowTool(opts: {
       moveBaselineEnd,
       applyChanges,
       cancel,
+      resetSession,
       busy,
     }),
     [
@@ -367,6 +381,7 @@ export function useSpotRowTool(opts: {
       moveBaselineEnd,
       applyChanges,
       cancel,
+      resetSession,
       busy,
     ],
   )

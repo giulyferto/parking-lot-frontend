@@ -10,22 +10,11 @@ export interface UndoStackBag {
   canRedo: boolean
   busy: boolean
   push: (command: UndoCommand) => void
+  replaceTop: (command: UndoCommand) => void
   undo: () => void
   redo: () => void
 }
 
-/**
- * Generic undo/redo command stack for the plan editor. Every entry is a
- * persisted action's inverse pair (see FloorEditorPage's handlers) - there's
- * no client-only draft state here, each undo/redo re-issues real API calls,
- * so entries run one at a time (`busy`) and the stacks live in refs rather
- * than state to avoid StrictMode's double-invoked updater re-running an API
- * call. `canUndo`/`canRedo` mirror the stack lengths into plain state
- * (updated wherever the refs change) so render never reads a ref directly.
- * Wired to Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z; `isBlocked()` (checked fresh on
- * every keypress, e.g. while the parking-row tool has an in-flight edit of
- * its own) suspends the shortcut without discarding the stacks.
- */
 export function useUndoStack(options: { isBlocked?: () => boolean } = {}): UndoStackBag {
   const { isBlocked } = options
   const isBlockedRef = useRef(isBlocked)
@@ -41,6 +30,13 @@ export function useUndoStack(options: { isBlocked?: () => boolean } = {}): UndoS
 
   const push = useCallback((command: UndoCommand) => {
     undoRef.current = [...undoRef.current, command]
+    redoRef.current = []
+    setCounts({ undo: undoRef.current.length, redo: 0 })
+  }, [])
+
+  const replaceTop = useCallback((command: UndoCommand) => {
+    undoRef.current =
+      undoRef.current.length > 0 ? [...undoRef.current.slice(0, -1), command] : [command]
     redoRef.current = []
     setCounts({ undo: undoRef.current.length, redo: 0 })
   }, [])
@@ -96,6 +92,7 @@ export function useUndoStack(options: { isBlocked?: () => boolean } = {}): UndoS
     canRedo: counts.redo > 0,
     busy,
     push,
+    replaceTop,
     undo,
     redo,
   }

@@ -74,13 +74,6 @@ const TOOL_HINT: Record<EditorTool, string> = {
   calibrate: 'Click two points across a distance you know, then enter it on the right',
 }
 
-/**
- * The admin's drag-and-drop canvas editor: drag a bay to reposition it
- * (FloorMap's onSpotDragEnd -> PATCH .../layout), and use the side panel to
- * set its size/rotation/status precisely or add a brand new bay. Rate plans
- * for this floor are managed further down the same panel since both are
- * floor-level admin tasks.
- */
 export function FloorEditorPage() {
   const { floorId } = useParams<{ floorId: string }>()
   const [floor, setFloor] = useState<Floor | null>(null)
@@ -105,19 +98,10 @@ export function FloorEditorPage() {
 
   useEffect(() => reload(), [reload])
 
-  // The parking-row tool below re-persists (delete previous + create next) on
-  // every baseline drag/param tweak, so a global undo firing mid-session
-  // would race its own id bookkeeping. `editor.tool` doesn't exist yet at
-  // this point (useFloorPlanEditor needs these handlers to construct), so
-  // the keyboard gate reads a ref kept current by the effect below instead.
-  const rowToolActiveRef = useRef(false)
-
-  // Every geometry/layout mutation below pushes its own inverse pair onto
-  // this stack right after the API call that performs it - see useUndoStack.
-  // Scope is deliberately "the plan" only: spot status and rate plans aren't
-  // tracked, matching how this editor already separates "layout" (this page
-  // + FloorMap) from those admin-only side panels.
-  const undoStack = useUndoStack({ isBlocked: () => rowToolActiveRef.current })
+  const spotRowBusyRef = useRef(false)
+  const spotRowResetRef = useRef<() => void>(() => {})
+  const spotRowPhaseRef = useRef<'idle' | 'drawing' | 'ready'>('idle')
+  const undoStack = useUndoStack({ isBlocked: () => spotRowBusyRef.current })
 
   const handleDragEnd = useCallback(
     async (spot: Spot, posX: number, posY: number) => {
@@ -251,14 +235,6 @@ export function FloorEditorPage() {
     onRescale,
   })
 
-  const rowToolActive = editor.tool === 'spotRow'
-  useEffect(() => {
-    rowToolActiveRef.current = rowToolActive
-  }, [rowToolActive])
-
-  // createSpot sends no geometry, so chain a layout PATCH with the standard
-  // metric footprint for the vehicle type, dropping the bay on a staggered grid
-  // so successive adds don't stack on top of each other at the origin.
   const handleCreateSpot = useCallback(
     async (input: SpotInput) => {
       if (!floorId) return
@@ -297,65 +273,9 @@ export function FloorEditorPage() {
     [floorId, spots.length, reload, undoStack],
   )
 
-  // Pushed once a parking-row session ends (a new row starts, or the tool
-  // changes away) - see handleCommitRow/finalizeRow. Individual recommits
-  // mid-session (dragging an endpoint, tweaking params) don't each get their
-  // own undo step; only the session's net result does, same granularity as
-  // "draw a boundary" being one undo step despite being several clicks.
-  const pendingRowRef = useRef<{ id: string; placement: SpotRowPlacement }[] | null>(null)
-
-  const finalizeRow = useCallback(() => {
-    const entries = pendingRowRef.current
-    pendingRowRef.current = null
-    if (!entries || !floorId) return
-    let currentIds = entries.map((e) => e.id)
-    const placements = entries.map((e) => e.placement)
-    undoStack.push({
-      undo: async () => {
-        await Promise.all(currentIds.map((id) => deleteSpot(id).catch(() => {})))
-        currentIds = []
-        reload()
-      },
-      redo: async () => {
-        const ids: string[] = []
-        for (const p of placements) {
-          const created = await createSpot(floorId, { code: p.code, vehicleType: p.vehicleType })
-          if (created?.id) {
-            await updateSpotLayout(created.id, {
-              posX: p.posX,
-              posY: p.posY,
-              width: p.width,
-              height: p.height,
-              rotation: p.rotation,
-            })
-            ids.push(created.id)
-          }
-        }
-        currentIds = ids
-        reload()
-      },
-    })
-  }, [floorId, reload, undoStack])
-
-  const prevToolRef = useRef(editor.tool)
-  useEffect(() => {
-    if (prevToolRef.current === 'spotRow' && editor.tool !== 'spotRow') finalizeRow()
-    prevToolRef.current = editor.tool
-  }, [editor.tool, finalizeRow])
-
-  // The "Parking row" tool commits as soon as the baseline is drawn, then
-  // recommits (delete previous + create next) whenever it's adjusted -
-  // `previousIds` is whatever it created last time (empty for a fresh row).
-  // Deletes go first so a code reused across the edit doesn't 409 against its
-  // own prior spot. Creates run sequentially so codes land in order and a
-  // mid-row failure is easy to reason about. A bulk endpoint is the eventual fix.
   const handleCommitRow = useCallback(
     async (placements: SpotRowPlacement[], previousIds: string[]): Promise<string[]> => {
       if (!floorId) return []
-      // A fresh row starting while a previous one in this same tool session
-      // is still only "pending" (never finalized because the tool never
-      // changed) - bank that one now so it isn't silently dropped.
-      if (previousIds.length === 0 && placements.length > 0) finalizeRow()
       if (previousIds.length) {
         await Promise.all(previousIds.map((id) => deleteSpot(id).catch(() => {})))
       }
@@ -378,8 +298,39 @@ export function FloorEditorPage() {
           failed.push(p.code)
         }
       }
-      pendingRowRef.current = succeeded.length > 0 ? succeeded : null
       const createdIds = succeeded.map((e) => e.id)
+      if (succeeded.length > 0) {
+        let currentIds = createdIds
+        const redoPlacements = succeeded.map((e) => e.placement)
+        const command: UndoCommand = {
+          undo: async () => {
+            await Promise.all(currentIds.map((id) => deleteSpot(id).catch(() => {})))
+            currentIds = []
+            if (spotRowPhaseRef.current !== 'drawing') spotRowResetRef.current()
+            reload()
+          },
+          redo: async () => {
+            const ids: string[] = []
+            for (const p of redoPlacements) {
+              const created = await createSpot(floorId, { code: p.code, vehicleType: p.vehicleType })
+              if (created?.id) {
+                await updateSpotLayout(created.id, {
+                  posX: p.posX,
+                  posY: p.posY,
+                  width: p.width,
+                  height: p.height,
+                  rotation: p.rotation,
+                })
+                ids.push(created.id)
+              }
+            }
+            currentIds = ids
+            reload()
+          },
+        }
+        if (previousIds.length === 0) undoStack.push(command)
+        else undoStack.replaceTop(command)
+      }
       reload()
       if (failed.length) {
         window.alert(
@@ -388,11 +339,9 @@ export function FloorEditorPage() {
       }
       return createdIds
     },
-    [floorId, reload, finalizeRow],
+    [floorId, reload, undoStack],
   )
 
-  // All spot codes currently on the floor; useSpotRowTool excludes this row's
-  // own just-committed codes internally so a row doesn't "clash" with itself.
   const existingCodes = useMemo(() => new Set(spots.map((s) => s.code)), [spots])
 
   const spotRow = useSpotRowTool({
@@ -402,6 +351,18 @@ export function FloorEditorPage() {
     existingCodes,
     onCommitRow: handleCommitRow,
   })
+
+  useEffect(() => {
+    spotRowBusyRef.current = spotRow.busy
+  }, [spotRow.busy])
+
+  useEffect(() => {
+    spotRowResetRef.current = spotRow.resetSession
+  }, [spotRow.resetSession])
+
+  useEffect(() => {
+    spotRowPhaseRef.current = spotRow.phase
+  }, [spotRow.phase])
 
   const boundaryExists = useMemo(() => elements.some((e) => e.kind === 'BOUNDARY'), [elements])
 
@@ -434,7 +395,7 @@ export function FloorEditorPage() {
             onFit={() => setFitToken((n) => n + 1)}
             boundaryExists={boundaryExists}
             undoStack={undoStack}
-            rowToolActive={rowToolActive}
+            rowBusy={spotRow.busy}
           />
           <div className="deck-grid relative h-full min-h-[24rem] w-full overflow-hidden rounded-xl border border-slate-200 md:min-h-0">
             {spots.length === 0 && elements.length === 0 && editor.tool === 'select' ? (
@@ -517,16 +478,16 @@ function ToolStrip({
   onFit,
   boundaryExists,
   undoStack,
-  rowToolActive,
+  rowBusy,
 }: {
   tool: EditorTool
   onPick: (t: EditorTool) => void
   onFit: () => void
   boundaryExists: boolean
   undoStack: UndoStackBag
-  rowToolActive: boolean
+  rowBusy: boolean
 }) {
-  const rowToolHint = 'Finish or cancel the parking row first'
+  const rowBusyHint = 'Saving the parking row…'
   return (
     <div className="flex flex-wrap items-center gap-1.5">
       {TOOLS.map(([value, label]) => {
@@ -553,8 +514,8 @@ function ToolStrip({
         <button
           type="button"
           onClick={undoStack.undo}
-          disabled={rowToolActive || !undoStack.canUndo || undoStack.busy}
-          title={rowToolActive ? rowToolHint : 'Undo (Cmd/Ctrl+Z)'}
+          disabled={rowBusy || !undoStack.canUndo || undoStack.busy}
+          title={rowBusy ? rowBusyHint : 'Undo (Cmd/Ctrl+Z)'}
           className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50 disabled:opacity-40"
         >
           Undo
@@ -562,8 +523,8 @@ function ToolStrip({
         <button
           type="button"
           onClick={undoStack.redo}
-          disabled={rowToolActive || !undoStack.canRedo || undoStack.busy}
-          title={rowToolActive ? rowToolHint : 'Redo (Cmd/Ctrl+Shift+Z)'}
+          disabled={rowBusy || !undoStack.canRedo || undoStack.busy}
+          title={rowBusy ? rowBusyHint : 'Redo (Cmd/Ctrl+Shift+Z)'}
           className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50 disabled:opacity-40"
         >
           Redo
@@ -580,18 +541,8 @@ function ToolStrip({
   )
 }
 
-/**
- * Contextual instruction bar for the active draw tool. Pinned to the top of the
- * floor plan (not stacked above it) so switching tools never reflows the canvas,
- * and `pointer-events-none` so it never eats a click meant for the map. It stays
- * mounted and fades/slides between states; we keep drawing the last real tool's
- * text so it doesn't blank out mid-fade when you drop back to `select`.
- */
 function ToolHint({ tool }: { tool: EditorTool }) {
   const visible = tool !== 'select'
-  // Keep rendering the last non-idle tool while fading out (React's documented
-  // "adjust state during render" pattern - cheaper than an effect, no flash of
-  // empty text when `tool` flips back to `select`).
   const [shown, setShown] = useState<EditorTool>(visible ? tool : 'boundary')
   if (visible && tool !== shown) setShown(tool)
 
@@ -621,7 +572,6 @@ function ToolHint({ tool }: { tool: EditorTool }) {
   )
 }
 
-// Wrap key names in <kbd> so "press Enter" / "Esc cancels" read as keys, not prose.
 function renderHintStep(step: string) {
   return step.split(/\b(Enter|Esc)\b/).map((chunk, i) =>
     chunk === 'Enter' || chunk === 'Esc' ? (
@@ -637,14 +587,6 @@ function renderHintStep(step: string) {
   )
 }
 
-/**
- * The idle "select / move" tool, pinned to the floor plan itself (top-left)
- * rather than sitting in the row of draw tools. Clicking it is exactly
- * `editor.setTool('select')`. Three looks:
- *   - blue          : select tool active, nothing picked - idle, ready to select
- *   - black outline  : an element is picked, so you're editing/moving it (edit mode on)
- *   - muted          : a draw tool is active, select is off
- */
 function SelectHandle({
   active,
   editing,
