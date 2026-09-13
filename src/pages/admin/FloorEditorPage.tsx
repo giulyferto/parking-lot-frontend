@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { getFloor, rescaleFloor } from '../../api/floors'
@@ -9,6 +9,7 @@ import {
   updateSpotLayout,
   updateSpotStatus,
   type SpotInput,
+  type SpotLayoutInput,
 } from '../../api/spots'
 import { createRatePlan, listRatePlans } from '../../api/ratePlans'
 import {
@@ -33,6 +34,7 @@ import {
   type FloorPlanEditorBag,
 } from '../../components/FloorMap/useFloorPlanEditor'
 import { useSpotRowTool, type SpotRowToolBag } from '../../components/FloorMap/useSpotRowTool'
+import { useUndoStack, type UndoCommand, type UndoStackBag } from './useUndoStack'
 import {
   AISLE_WIDTH_BY_ANGLE_M,
   ANGLE_PRESETS_DEG,
@@ -103,53 +105,140 @@ export function FloorEditorPage() {
 
   useEffect(() => reload(), [reload])
 
+  // The parking-row tool below re-persists (delete previous + create next) on
+  // every baseline drag/param tweak, so a global undo firing mid-session
+  // would race its own id bookkeeping. `editor.tool` doesn't exist yet at
+  // this point (useFloorPlanEditor needs these handlers to construct), so
+  // the keyboard gate reads a ref kept current by the effect below instead.
+  const rowToolActiveRef = useRef(false)
+
+  // Every geometry/layout mutation below pushes its own inverse pair onto
+  // this stack right after the API call that performs it - see useUndoStack.
+  // Scope is deliberately "the plan" only: spot status and rate plans aren't
+  // tracked, matching how this editor already separates "layout" (this page
+  // + FloorMap) from those admin-only side panels.
+  const undoStack = useUndoStack({ isBlocked: () => rowToolActiveRef.current })
+
   const handleDragEnd = useCallback(
     async (spot: Spot, posX: number, posY: number) => {
-      await updateSpotLayout(spot.id, {
-        posX,
-        posY,
+      const before: SpotLayoutInput = {
+        posX: spot.posX,
+        posY: spot.posY,
         width: spot.width,
         height: spot.height,
         rotation: spot.rotation,
+      }
+      const after: SpotLayoutInput = { ...before, posX, posY }
+      await updateSpotLayout(spot.id, after)
+      undoStack.push({
+        undo: async () => {
+          await updateSpotLayout(spot.id, before)
+          reload()
+        },
+        redo: async () => {
+          await updateSpotLayout(spot.id, after)
+          reload()
+        },
       })
       reload()
     },
-    [reload],
+    [reload, undoStack],
   )
 
   const onCreate = useCallback(
     async (input: FloorElementInput) => {
       if (!floorId) return
       try {
-        await createFloorElement(floorId, input)
+        const created = await createFloorElement(floorId, input)
+        let currentId = created.id
+        undoStack.push({
+          undo: async () => {
+            await deleteFloorElement(currentId)
+            reload()
+          },
+          redo: async () => {
+            const recreated = await createFloorElement(floorId, input)
+            currentId = recreated.id
+            reload()
+          },
+        })
       } catch {
         window.alert('Could not save that element. A floor can only have one boundary.')
       }
       reload()
     },
-    [floorId, reload],
+    [floorId, reload, undoStack],
   )
   const onUpdate = useCallback(
     async (id: string, patch: FloorElementPatch) => {
+      const before = elements.find((e) => e.id === id)
       await updateFloorElement(id, patch)
+      if (before) {
+        const inverse: FloorElementPatch = {}
+        if (patch.geometry !== undefined) inverse.geometry = before.geometry
+        if (patch.style !== undefined) inverse.style = before.style
+        if (patch.kind !== undefined) inverse.kind = before.kind
+        if (patch.z !== undefined) inverse.z = before.z
+        undoStack.push({
+          undo: async () => {
+            await updateFloorElement(id, inverse)
+            reload()
+          },
+          redo: async () => {
+            await updateFloorElement(id, patch)
+            reload()
+          },
+        })
+      }
       reload()
     },
-    [reload],
+    [elements, reload, undoStack],
   )
   const onDelete = useCallback(
     async (id: string) => {
+      const before = elements.find((e) => e.id === id)
       await deleteFloorElement(id)
+      if (before && floorId) {
+        const recreateInput: FloorElementInput = {
+          kind: before.kind,
+          geometry: before.geometry,
+          style: before.style,
+          z: before.z,
+        }
+        let currentId = id
+        undoStack.push({
+          undo: async () => {
+            const recreated = await createFloorElement(floorId, recreateInput)
+            currentId = recreated.id
+            reload()
+          },
+          redo: async () => {
+            await deleteFloorElement(currentId)
+            reload()
+          },
+        })
+      }
       reload()
     },
-    [reload],
+    [elements, floorId, reload, undoStack],
   )
   const onRescale = useCallback(
     async (factor: number) => {
       if (!floorId) return
       await rescaleFloor(floorId, factor)
+      undoStack.push({
+        undo: async () => {
+          await rescaleFloor(floorId, 1 / factor)
+          reload()
+        },
+        redo: async () => {
+          await rescaleFloor(floorId, factor)
+          reload()
+        },
+      })
       reload()
     },
-    [floorId, reload],
+    [floorId, reload, undoStack],
   )
 
   const editor = useFloorPlanEditor({
@@ -162,6 +251,11 @@ export function FloorEditorPage() {
     onRescale,
   })
 
+  const rowToolActive = editor.tool === 'spotRow'
+  useEffect(() => {
+    rowToolActiveRef.current = rowToolActive
+  }, [rowToolActive])
+
   // createSpot sends no geometry, so chain a layout PATCH with the standard
   // metric footprint for the vehicle type, dropping the bay on a staggered grid
   // so successive adds don't stack on top of each other at the origin.
@@ -173,13 +267,26 @@ export function FloorEditorPage() {
         const dims = STALL_DIMENSIONS_BY_VEHICLE[input.vehicleType]
         if (created && created.id) {
           const n = spots.length
-          const cols = 8
-          await updateSpotLayout(created.id, {
-            posX: (n % cols) * (dims.width + 0.6),
-            posY: Math.floor(n / cols) * (dims.height + 0.6),
+          const layout: SpotLayoutInput = {
+            posX: (n % 8) * (dims.width + 0.6),
+            posY: Math.floor(n / 8) * (dims.height + 0.6),
             width: dims.width,
             height: dims.height,
             rotation: 0,
+          }
+          await updateSpotLayout(created.id, layout)
+          let currentId = created.id
+          undoStack.push({
+            undo: async () => {
+              await deleteSpot(currentId)
+              reload()
+            },
+            redo: async () => {
+              const recreated = await createSpot(floorId, input)
+              currentId = recreated.id
+              await updateSpotLayout(currentId, layout)
+              reload()
+            },
           })
         }
       } catch {
@@ -187,8 +294,54 @@ export function FloorEditorPage() {
       }
       reload()
     },
-    [floorId, spots.length, reload],
+    [floorId, spots.length, reload, undoStack],
   )
+
+  // Pushed once a parking-row session ends (a new row starts, or the tool
+  // changes away) - see handleCommitRow/finalizeRow. Individual recommits
+  // mid-session (dragging an endpoint, tweaking params) don't each get their
+  // own undo step; only the session's net result does, same granularity as
+  // "draw a boundary" being one undo step despite being several clicks.
+  const pendingRowRef = useRef<{ id: string; placement: SpotRowPlacement }[] | null>(null)
+
+  const finalizeRow = useCallback(() => {
+    const entries = pendingRowRef.current
+    pendingRowRef.current = null
+    if (!entries || !floorId) return
+    let currentIds = entries.map((e) => e.id)
+    const placements = entries.map((e) => e.placement)
+    undoStack.push({
+      undo: async () => {
+        await Promise.all(currentIds.map((id) => deleteSpot(id).catch(() => {})))
+        currentIds = []
+        reload()
+      },
+      redo: async () => {
+        const ids: string[] = []
+        for (const p of placements) {
+          const created = await createSpot(floorId, { code: p.code, vehicleType: p.vehicleType })
+          if (created?.id) {
+            await updateSpotLayout(created.id, {
+              posX: p.posX,
+              posY: p.posY,
+              width: p.width,
+              height: p.height,
+              rotation: p.rotation,
+            })
+            ids.push(created.id)
+          }
+        }
+        currentIds = ids
+        reload()
+      },
+    })
+  }, [floorId, reload, undoStack])
+
+  const prevToolRef = useRef(editor.tool)
+  useEffect(() => {
+    if (prevToolRef.current === 'spotRow' && editor.tool !== 'spotRow') finalizeRow()
+    prevToolRef.current = editor.tool
+  }, [editor.tool, finalizeRow])
 
   // The "Parking row" tool commits as soon as the baseline is drawn, then
   // recommits (delete previous + create next) whenever it's adjusted -
@@ -199,10 +352,14 @@ export function FloorEditorPage() {
   const handleCommitRow = useCallback(
     async (placements: SpotRowPlacement[], previousIds: string[]): Promise<string[]> => {
       if (!floorId) return []
+      // A fresh row starting while a previous one in this same tool session
+      // is still only "pending" (never finalized because the tool never
+      // changed) - bank that one now so it isn't silently dropped.
+      if (previousIds.length === 0 && placements.length > 0) finalizeRow()
       if (previousIds.length) {
         await Promise.all(previousIds.map((id) => deleteSpot(id).catch(() => {})))
       }
-      const createdIds: string[] = []
+      const succeeded: { id: string; placement: SpotRowPlacement }[] = []
       const failed: string[] = []
       for (const p of placements) {
         try {
@@ -215,12 +372,14 @@ export function FloorEditorPage() {
               height: p.height,
               rotation: p.rotation,
             })
-            createdIds.push(created.id)
+            succeeded.push({ id: created.id, placement: p })
           }
         } catch {
           failed.push(p.code)
         }
       }
+      pendingRowRef.current = succeeded.length > 0 ? succeeded : null
+      const createdIds = succeeded.map((e) => e.id)
       reload()
       if (failed.length) {
         window.alert(
@@ -229,7 +388,7 @@ export function FloorEditorPage() {
       }
       return createdIds
     },
-    [floorId, reload],
+    [floorId, reload, finalizeRow],
   )
 
   // All spot codes currently on the floor; useSpotRowTool excludes this row's
@@ -274,6 +433,8 @@ export function FloorEditorPage() {
             onPick={editor.setTool}
             onFit={() => setFitToken((n) => n + 1)}
             boundaryExists={boundaryExists}
+            undoStack={undoStack}
+            rowToolActive={rowToolActive}
           />
           <div className="deck-grid relative h-full min-h-[24rem] w-full overflow-hidden rounded-xl border border-slate-200 md:min-h-0">
             {spots.length === 0 && elements.length === 0 && editor.tool === 'select' ? (
@@ -337,6 +498,7 @@ export function FloorEditorPage() {
               spot={selectedSpot}
               onClose={() => setSelectedSpot(null)}
               onChanged={reload}
+              pushUndo={undoStack.push}
             />
           ) : (
             <p className="text-sm text-slate-400">Click a bay to edit its size, rotation or status.</p>
@@ -354,12 +516,17 @@ function ToolStrip({
   onPick,
   onFit,
   boundaryExists,
+  undoStack,
+  rowToolActive,
 }: {
   tool: EditorTool
   onPick: (t: EditorTool) => void
   onFit: () => void
   boundaryExists: boolean
+  undoStack: UndoStackBag
+  rowToolActive: boolean
 }) {
+  const rowToolHint = 'Finish or cancel the parking row first'
   return (
     <div className="flex flex-wrap items-center gap-1.5">
       {TOOLS.map(([value, label]) => {
@@ -382,13 +549,33 @@ function ToolStrip({
           </button>
         )
       })}
-      <button
-        type="button"
-        onClick={onFit}
-        className="ml-auto rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50"
-      >
-        Fit
-      </button>
+      <div className="ml-auto flex items-center gap-1.5">
+        <button
+          type="button"
+          onClick={undoStack.undo}
+          disabled={rowToolActive || !undoStack.canUndo || undoStack.busy}
+          title={rowToolActive ? rowToolHint : 'Undo (Cmd/Ctrl+Z)'}
+          className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50 disabled:opacity-40"
+        >
+          Undo
+        </button>
+        <button
+          type="button"
+          onClick={undoStack.redo}
+          disabled={rowToolActive || !undoStack.canRedo || undoStack.busy}
+          title={rowToolActive ? rowToolHint : 'Redo (Cmd/Ctrl+Shift+Z)'}
+          className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50 disabled:opacity-40"
+        >
+          Redo
+        </button>
+        <button
+          type="button"
+          onClick={onFit}
+          className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50"
+        >
+          Fit
+        </button>
+      </div>
     </div>
   )
 }
@@ -1067,10 +1254,12 @@ function SpotEditor({
   spot,
   onClose,
   onChanged,
+  pushUndo,
 }: {
   spot: Spot
   onClose: () => void
   onChanged: () => void
+  pushUndo: (command: UndoCommand) => void
 }) {
   const [width, setWidth] = useState(String(spot.width))
   const [height, setHeight] = useState(String(spot.height))
@@ -1081,12 +1270,29 @@ function SpotEditor({
     event.preventDefault()
     setSaving(true)
     try {
-      await updateSpotLayout(spot.id, {
+      const before: SpotLayoutInput = {
         posX: spot.posX,
         posY: spot.posY,
+        width: spot.width,
+        height: spot.height,
+        rotation: spot.rotation,
+      }
+      const after: SpotLayoutInput = {
+        ...before,
         width: Number(width),
         height: Number(height),
         rotation: Number(rotation),
+      }
+      await updateSpotLayout(spot.id, after)
+      pushUndo({
+        undo: async () => {
+          await updateSpotLayout(spot.id, before)
+          onChanged()
+        },
+        redo: async () => {
+          await updateSpotLayout(spot.id, after)
+          onChanged()
+        },
       })
       onChanged()
     } finally {
@@ -1100,7 +1306,36 @@ function SpotEditor({
   }
 
   async function handleDelete() {
+    const snapshot: SpotInput & { layout: SpotLayoutInput } = {
+      code: spot.code,
+      vehicleType: spot.vehicleType,
+      layout: {
+        posX: spot.posX,
+        posY: spot.posY,
+        width: spot.width,
+        height: spot.height,
+        rotation: spot.rotation,
+      },
+    }
     await deleteSpot(spot.id)
+    let currentId: string | null = null
+    pushUndo({
+      undo: async () => {
+        const recreated = await createSpot(spot.floorId, {
+          code: snapshot.code,
+          vehicleType: snapshot.vehicleType,
+        })
+        currentId = recreated.id
+        await updateSpotLayout(currentId, snapshot.layout)
+        onChanged()
+      },
+      redo: async () => {
+        if (!currentId) return
+        await deleteSpot(currentId)
+        currentId = null
+        onChanged()
+      },
+    })
     onClose()
     onChanged()
   }
