@@ -120,6 +120,16 @@ export function bboxOfSpots(spots: Spot[]): Bbox | null {
   return { minX, minY, maxX, maxY }
 }
 
+export function bboxOfSpot(s: Spot): Bbox {
+  const halfW = s.width / 2
+  const halfH = s.height / 2
+  return { minX: s.posX - halfW, minY: s.posY - halfH, maxX: s.posX + halfW, maxY: s.posY + halfH }
+}
+
+export function bboxesIntersect(a: Bbox, b: Bbox): boolean {
+  return a.minX <= b.maxX && a.maxX >= b.minX && a.minY <= b.maxY && a.maxY >= b.minY
+}
+
 export function unionBbox(boxes: (Bbox | null | undefined)[]): Bbox | null {
   const present = boxes.filter((b): b is Bbox => !!b && Number.isFinite(b.minX))
   if (present.length === 0) return null
@@ -131,10 +141,6 @@ export function unionBbox(boxes: (Bbox | null | undefined)[]): Bbox | null {
   }))
 }
 
-/**
- * A "nice" round scale-bar length (meters) - roughly 18% of the visible span,
- * snapped down to 1 / 2 / 5 x 10^k.
- */
 export function niceScaleBarLength(spanM: number): number {
   const target = Math.max(spanM * 0.18, 0.1)
   const pow = Math.pow(10, Math.floor(Math.log10(target)))
@@ -164,7 +170,6 @@ export function setVertex(g: Geometry, i: number, p: Point): Geometry {
     : { type: 'LineString', coordinates: next }
 }
 
-/** Minimum vertex count that keeps a geometry valid for its shape. */
 export function minVertices(g: Geometry): number {
   if (g.type === 'Polygon') return 3
   if (g.type === 'LineString') return 2
@@ -188,31 +193,17 @@ export function formatMeters(m: number): string {
   return `${m.toFixed(2)} m`
 }
 
-// ---------------------------------------------------------------------------
-// Parking-row layout - pure math for the "Parking row" editor tool. Given a
-// baseline drawn along a drive aisle, produce the centered/rotated rectangles
-// (meters + degrees, the same space as Spot.posX/posY/rotation) for a whole row
-// of stalls at a chosen parking angle.
-// ---------------------------------------------------------------------------
-
 export interface SpotRowSpec {
-  /** Baseline = the front edge of the row, along the aisle. Drawn p0 -> p1. */
   p0: Point
   p1: Point
-  /** Stall long-axis angle to the baseline: 90 = perpendicular, 45/60 = angled. */
   angleDeg: number
-  /** Door-to-door width and nose-in depth, meters. */
   stallWidthM: number
   stallDepthM: number
-  /** How many stalls to place (the caller resolves any auto-fill first). */
   count: number
-  /** Which side of the p0 -> p1 direction the stalls occupy. */
   side: 'left' | 'right'
-  /** Reverse the angled lean (the correct sign depends on aisle travel direction). */
   flip: boolean
   codePrefix: string
   codeStart: number
-  /** Zero-pad the numeric part to this width; 0 = no padding. */
   codePad: number
   vehicleType: VehicleType
 }
@@ -231,7 +222,6 @@ function normalizeDeg(d: number): number {
   return ((d % 360) + 360) % 360
 }
 
-/** How many stalls of width W (at parking angle phi) fit along baseline p0 -> p1. */
 export function spotRowCapacity(
   p0: Point,
   p1: Point,
@@ -245,12 +235,6 @@ export function spotRowCapacity(
   return Math.max(0, Math.floor(L / pitch + 1e-6))
 }
 
-/**
- * Lay out a row of stall rectangles along the baseline. Each footprint is a
- * plain rotated rectangle (W x D), not a parallelogram - matching how spots are
- * modelled everywhere else; the sawtooth edge of angled parking comes from the
- * arrangement, not skewed cells.
- */
 export function computeSpotRow(spec: SpotRowSpec): SpotRowPlacement[] {
   const { p0, p1 } = spec
   const L = distance(p0, p1)
@@ -262,22 +246,20 @@ export function computeSpotRow(spec: SpotRowSpec): SpotRowPlacement[] {
   const sinPhi = Math.max(Math.sin(phi), 1e-3)
   const pitch = spec.stallWidthM / sinPhi // centre-to-centre spacing along the baseline
 
-  // Unit normal to the chosen side (u rotated +/-90 degrees).
   const sideSign = spec.side === 'left' ? 1 : -1
   const nx = -uy * sideSign
   const ny = ux * sideSign
 
-  // Angled lean, measured off the side normal; 0 at 90 degrees.
   const lean = (Math.PI / 2 - phi) * (spec.flip ? -1 : 1) * sideSign
   const cos = Math.cos(lean)
   const sin = Math.sin(lean)
-  const dirX = nx * cos - ny * sin // stall long-axis unit vector (aisle -> back of stall)
+  const dirX = nx * cos - ny * sin 
   const dirY = nx * sin + ny * cos
   const rotationDeg = normalizeDeg((Math.atan2(dirY, dirX) * 180) / Math.PI - 90)
 
   const out: SpotRowPlacement[] = []
   for (let k = 0; k < spec.count; k++) {
-    const along = (k + 0.5) * pitch // first stall flush at p0
+    const along = (k + 0.5) * pitch 
     const baseX = p0[0] + ux * along
     const baseY = p0[1] + uy * along
     const num = spec.codeStart + k
@@ -296,7 +278,6 @@ export function computeSpotRow(spec: SpotRowSpec): SpotRowPlacement[] {
   return out
 }
 
-/** Short human summary of a geometry for the editor's element list. */
 export function geometrySummary(g: Geometry): string {
   if (g.type === 'Point') return 'Point'
   if (g.type === 'Polygon') {

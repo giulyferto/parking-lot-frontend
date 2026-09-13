@@ -12,7 +12,9 @@ import {
   ZOOM_SCALE_EXTENT,
 } from './floorElementStyles'
 import {
+  bboxesIntersect,
   bboxOfGeometry,
+  bboxOfSpot,
   bboxOfSpots,
   distance,
   formatMeters,
@@ -41,18 +43,17 @@ interface ViewBox {
 interface FloorMapProps {
   spots: Spot[]
   elements?: FloorElement[]
-  selectedSpotId?: string
+  selectedSpotIds?: ReadonlySet<string>
   showScaleBar?: boolean
   showGrid?: boolean
   gridStepM?: number
-  /** Bumping this number resets pan/zoom to fit. */
   fitToken?: number
-  onSpotClick?: (spot: Spot) => void
-  /** Called on drag end with the spot's new x/y (meters) - only used by the admin layout editor. */
+  onSpotClick?: (spot: Spot, event: MouseEvent) => void
   onSpotDragEnd?: (spot: Spot, posX: number, posY: number) => void
-  /** Present only in the admin editor - enables plan-drawing tools. */
+  onSpotGroupDragEnd?: (moves: Array<{ spot: Spot; posX: number; posY: number }>) => void
+  onMarqueeSelect?: (ids: string[], additive: boolean) => void
+  onCanvasClick?: () => void
   editor?: FloorPlanEditorBag
-  /** Present only in the admin editor - the "Parking row" bay-layout tool. */
   spotRowTool?: SpotRowToolBag
   className?: string
 }
@@ -63,25 +64,19 @@ function polyD(pts: Point[], close: boolean): string {
   return `M${h[0]},${h[1]}` + rest.map((p) => `L${p[0]},${p[1]}`).join('') + (close ? 'Z' : '')
 }
 
-/**
- * Renders a floor plan: the outer boundary, columns, drive lanes, streets and
- * entrances (the `elements` layer), then every bay as a color-coded stall on top.
- * "React owns the `<svg>` container, D3 owns the children": the effect below
- * re-runs the enter/update/exit joins whenever the inputs change. When `editor`
- * is passed, D3 also draws the drawing rubber-band / vertex handles / calibrate
- * ruler and wires pointer + `d3.zoom` (wheel zoom, drag pan) interactions -
- * still all from props, no per-element JSX.
- */
 export function FloorMap({
   spots,
   elements,
-  selectedSpotId,
+  selectedSpotIds,
   showScaleBar,
   showGrid,
   gridStepM,
   fitToken,
   onSpotClick,
   onSpotDragEnd,
+  onSpotGroupDragEnd,
+  onMarqueeSelect,
+  onCanvasClick,
   editor,
   spotRowTool,
   className,
@@ -96,17 +91,12 @@ export function FloorMap({
     const svgEl = svgRef.current
     if (!svgEl) return
     const svg = d3.select(svgEl)
-    // Paint order: BOUNDARY first (the frame), then the rest, then ENTRANCE and
-    // LABEL on top - an entrance rectangle has to paint over the wall band, and
-    // labels should never be buried. Array#sort is stable, so ties keep order.
     const paintRank = (k: FloorElement['kind']) =>
       k === 'BOUNDARY' ? 0 : k === 'ENTRANCE' ? 2 : k === 'LABEL' ? 3 : 1
     const els = (elements ?? []).slice().sort((a, b) => paintRank(a.kind) - paintRank(b.kind))
     const selectMode = !editor || editor.tool === 'select'
     const step = gridStepM && gridStepM > 0 ? gridStepM : 5
 
-    // 1. Content bbox (meters): the boundary frames the plan if there is one,
-    //    otherwise fall back to the union of everything drawn.
     const boundary = els.find((e) => e.kind === 'BOUNDARY')
     const box: Bbox =
       (boundary
@@ -118,8 +108,6 @@ export function FloorMap({
         maxY: 0,
       }
 
-    // 2. viewBox - frozen while a draw/calibrate draft is in progress so the
-    //    canvas doesn't jump under the cursor.
     const drafting = !!editor?.draft || (!!spotRowTool?.active && !!spotRowTool.baseline)
     let vb: ViewBox
     if (drafting && frozenVbRef.current) {
@@ -154,7 +142,6 @@ export function FloorMap({
     const overlay = viewport.select<SVGGElement>('g.overlay')
     const chrome = svg.select<SVGGElement>('g.chrome')
 
-    // 3. Scale bar (screen-pinned - lives outside the zoomed viewport).
     function drawChrome(k: number) {
       chrome.selectAll('*').remove()
       if (!showScaleBar) return
@@ -196,7 +183,6 @@ export function FloorMap({
         .text(`${len} m`)
     }
 
-    // 7. Editor overlay: draft rubber-band, vertex handles, calibrate ruler.
     function drawOverlay(k: number) {
       overlay.selectAll('*').remove()
       if (!editor) return
@@ -205,7 +191,6 @@ export function FloorMap({
 
       if (d?.mode === 'shape') {
         const raw = cursorRef.current
-        // Preview where the point will actually land (snapped), not the raw cursor.
         const cur = raw ? editor.snapDraftPoint(raw) : null
         const preview = cur ? [...d.vertices, cur] : d.vertices
         if (preview.length >= 2) {
@@ -218,9 +203,6 @@ export function FloorMap({
             .attr('stroke-dasharray', '4 3')
             .style('vector-effect', 'non-scaling-stroke')
 
-          // Live dimensions: length (m) at each segment's midpoint, nudged off
-          // the line. The segment being stretched (last, when the cursor is
-          // live) is drawn solid; already-placed ones are muted.
           const font = pxToMeters(12, k)
           const off = pxToMeters(11, k)
           for (let i = 1; i < preview.length; i++) {
@@ -291,10 +273,6 @@ export function FloorMap({
           .style('vector-effect', 'non-scaling-stroke')
           .style('pointer-events', 'all')
           .style('cursor', 'pointer')
-        // While a vertex is dragged, re-render the element itself (not just the
-        // handle) from a geometry with that vertex moved, so the connected edges
-        // and their live dimension labels follow the cursor instead of snapping
-        // into place only on drop.
         const elLayer = viewport.select<SVGGElement>('g.elements')
         const renderLive = (geom: typeof sel.geometry) =>
           elLayer
@@ -479,9 +457,6 @@ export function FloorMap({
     const k0 = d3.zoomTransform(svgEl).k || 1
     viewport.attr('transform', d3.zoomTransform(svgEl).toString())
 
-    // 5. Grid pattern (world-aligned; rect overshoots the viewBox so panning
-    //    still shows grid). Kept to a small multiple - a huge tiled pattern is
-    //    expensive, and the grid is a cosmetic aid.
     const gpad = Math.max(vb.w, vb.h)
     svg.select('#meter-grid').attr('width', step).attr('height', step)
     svg.select('#meter-grid path.grid-cell').attr('d', `M${step},0 L0,0 L0,${step}`)
@@ -493,7 +468,6 @@ export function FloorMap({
       .attr('height', vb.h + gpad * 2)
       .attr('display', showGrid ? null : 'none')
 
-    // 6. Elements layer.
     const elJoin = viewport
       .select<SVGGElement>('g.elements')
       .selectAll<SVGGElement, FloorElement>('g.element')
@@ -536,12 +510,6 @@ export function FloorMap({
       elMerged.on('.drag', null).on('click', null).style('cursor', null)
     }
 
-    // 6b. Pointer surface for drawing (below spots/elements so their own
-    //     handlers win; catches clicks on empty canvas). It lives inside the
-    //     zoomed viewport, so at the zoomed-out limit the visible area is
-    //     1/ZOOM_SCALE_EXTENT[0] times the viewBox; pad by that (plus slack for
-    //     panning) or a click near the edge misses the rect and does nothing.
-    //     It's transparent and unpatterned, so an oversized rect is cheap.
     const hitPad = (Math.max(vb.w, vb.h) * 3) / ZOOM_SCALE_EXTENT[0]
     const hit = viewport.select<SVGRectElement>('rect.hit')
     hit
@@ -576,36 +544,71 @@ export function FloorMap({
           activeEditor.canvasDblClick()
         })
       if (placing) {
-        // In a drawing tool the point drops where you press - crisp, and a small
-        // wobble on the button won't cancel it the way `click` would.
-        hit.on('click', null).on('mousedown', (event: MouseEvent) => {
+        hit.on('.drag', null).on('click', null).on('mousedown', (event: MouseEvent) => {
           if (event.button !== 0) return
           event.preventDefault()
           place(event)
         })
+      } else if (onMarqueeSelect) {
+        let marqueeStart: Point | null = null
+        let marqueeMoved = false
+        const moveThreshold = pxToMeters(4, d3.zoomTransform(svgEl).k || 1)
+        const marqueeDrag = d3
+          .drag<SVGRectElement, unknown>()
+          .container(dragContainer)
+          .on('start', (event) => {
+            marqueeStart = [event.x, event.y]
+            marqueeMoved = false
+          })
+          .on('drag', (event) => {
+            if (!marqueeStart) return
+            if (!marqueeMoved && distance(marqueeStart, [event.x, event.y]) > moveThreshold) {
+              marqueeMoved = true
+            }
+            if (!marqueeMoved) return
+            const x0 = Math.min(marqueeStart[0], event.x)
+            const y0 = Math.min(marqueeStart[1], event.y)
+            const w = Math.abs(event.x - marqueeStart[0])
+            const h = Math.abs(event.y - marqueeStart[1])
+            let rect = overlay.select<SVGRectElement>('rect.marquee')
+            if (rect.empty()) {
+              rect = overlay
+                .append('rect')
+                .attr('class', 'marquee')
+                .attr('fill', 'rgba(37,99,235,0.08)')
+                .attr('stroke', RUBBER_BAND_STROKE)
+                .attr('stroke-width', 1.5)
+                .attr('stroke-dasharray', '4 3')
+                .style('vector-effect', 'non-scaling-stroke')
+            }
+            rect.attr('x', x0).attr('y', y0).attr('width', w).attr('height', h)
+          })
+          .on('end', (event) => {
+            const start = marqueeStart
+            marqueeStart = null
+            overlay.select('rect.marquee').remove()
+            const additive = !!(event.sourceEvent as MouseEvent).shiftKey || !!(event.sourceEvent as MouseEvent).metaKey || !!(event.sourceEvent as MouseEvent).ctrlKey
+            if (!marqueeMoved || !start) {
+              place(event.sourceEvent as MouseEvent)
+              onCanvasClick?.()
+              return
+            }
+            const box: Bbox = {
+              minX: Math.min(start[0], event.x),
+              minY: Math.min(start[1], event.y),
+              maxX: Math.max(start[0], event.x),
+              maxY: Math.max(start[1], event.y),
+            }
+            const ids = spots.filter((s) => bboxesIntersect(bboxOfSpot(s), box)).map((s) => s.id)
+            onMarqueeSelect(ids, additive)
+          })
+        hit.on('mousedown', null).on('click', null).call(marqueeDrag)
       } else {
-        // `select` stays on `click` so a pan-drag doesn't deselect.
-        hit.on('mousedown', null).on('click', (event: MouseEvent) => place(event))
+        hit.on('.drag', null).on('mousedown', null).on('click', (event: MouseEvent) => place(event))
       }
     } else {
-      hit.on('mousedown', null).on('click', null).on('mousemove', null).on('dblclick', null)
+      hit.on('.drag', null).on('mousedown', null).on('click', null).on('mousemove', null).on('dblclick', null)
     }
-
-    // 8. Spots layer (unchanged shape; sized in meters now).
-    const drag = d3
-      .drag<SVGGElement, Spot>()
-      .container(dragContainer)
-      .on('start', function (event) {
-        event.sourceEvent.stopPropagation()
-        d3.select(this).raise().classed('is-dragging', true)
-      })
-      .on('drag', function (event, d) {
-        d3.select(this).attr('transform', `translate(${event.x}, ${event.y}) rotate(${d.rotation})`)
-      })
-      .on('end', function (event, d) {
-        d3.select(this).classed('is-dragging', false)
-        onSpotDragEnd?.(d, event.x, event.y)
-      })
 
     const groups = viewport
       .select<SVGGElement>('g.spots')
@@ -648,9 +651,66 @@ export function FloorMap({
     const merged = entered.merge(groups)
     const labelFont = 11 / (viewToPx * k0)
 
+    type DragNode = SVGGElement & { __groupIds?: ReadonlySet<string> | null; __moved?: boolean }
+    const drag = d3
+      .drag<SVGGElement, Spot>()
+      .container(dragContainer)
+      .subject((_event, d) => ({ x: d.posX, y: d.posY }))
+      .on('start', function (event, d) {
+        event.sourceEvent.stopPropagation()
+        const node = this as DragNode
+        node.__moved = false
+        const grouped = !!selectedSpotIds && selectedSpotIds.size > 1 && selectedSpotIds.has(d.id)
+        node.__groupIds = grouped ? selectedSpotIds! : null
+      })
+      .on('drag', function (event, d) {
+        const node = this as DragNode
+        if (!node.__moved) {
+          node.__moved = true
+          const nodes = node.__groupIds ? merged.filter((s) => node.__groupIds!.has(s.id)) : d3.select(this)
+          nodes.raise().classed('is-dragging', true)
+        }
+        const dx = event.x - d.posX
+        const dy = event.y - d.posY
+        if (node.__groupIds) {
+          merged
+            .filter((s) => node.__groupIds!.has(s.id))
+            .attr(
+              'transform',
+              (s) => `translate(${s.posX + dx}, ${s.posY + dy}) rotate(${s.rotation})`,
+            )
+        } else {
+          d3.select(this).attr('transform', `translate(${event.x}, ${event.y}) rotate(${d.rotation})`)
+        }
+      })
+      .on('end', function (event, d) {
+        const node = this as DragNode
+        const groupIds = node.__groupIds
+        const moved = node.__moved
+        node.__groupIds = null
+        node.__moved = false
+        if (!moved) return 
+        if (groupIds) {
+          const dx = event.x - d.posX
+          const dy = event.y - d.posY
+          merged.filter((s) => groupIds.has(s.id)).classed('is-dragging', false)
+          const moves = spots
+            .filter((s) => groupIds.has(s.id))
+            .map((s) => ({
+              spot: s,
+              posX: s.id === d.id ? event.x : s.posX + dx,
+              posY: s.id === d.id ? event.y : s.posY + dy,
+            }))
+          onSpotGroupDragEnd?.(moves)
+        } else {
+          d3.select(this).classed('is-dragging', false)
+          onSpotDragEnd?.(d, event.x, event.y)
+        }
+      })
+
     merged
       .attr('transform', (d) => `translate(${d.posX}, ${d.posY}) rotate(${d.rotation})`)
-      .on('click', (_event, d) => onSpotClick?.(d))
+      .on('click', (event: MouseEvent, d) => onSpotClick?.(d, event))
     if (selectMode) merged.style('pointer-events', null)
     else merged.style('pointer-events', 'none')
 
@@ -668,8 +728,8 @@ export function FloorMap({
       .attr('height', (d) => d.height)
       .attr('fill', (d) => SPOT_COLORS[d.status])
       .attr('fill-opacity', (d) => (d.status === 'DISABLED' ? 0.55 : 0.9))
-      .attr('stroke', (d) => (d.id === selectedSpotId ? SPOT_SELECTED_STROKE : 'rgba(15,23,42,0.12)'))
-      .attr('stroke-width', (d) => (d.id === selectedSpotId ? 2.5 : 1))
+      .attr('stroke', (d) => (selectedSpotIds?.has(d.id) ? SPOT_SELECTED_STROKE : 'rgba(15,23,42,0.12)'))
+      .attr('stroke-width', (d) => (selectedSpotIds?.has(d.id) ? 2.5 : 1))
 
     merged
       .select<SVGRectElement>('rect.spot-paint')
@@ -694,13 +754,16 @@ export function FloorMap({
   }, [
     spots,
     elements,
-    selectedSpotId,
+    selectedSpotIds,
     showScaleBar,
     showGrid,
     gridStepM,
     fitToken,
     onSpotClick,
     onSpotDragEnd,
+    onSpotGroupDragEnd,
+    onMarqueeSelect,
+    onCanvasClick,
     editor,
     spotRowTool,
   ])

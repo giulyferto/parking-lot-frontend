@@ -80,7 +80,11 @@ export function FloorEditorPage() {
   const [spots, setSpots] = useState<Spot[]>([])
   const [elements, setElements] = useState<FloorElement[]>([])
   const [ratePlans, setRatePlans] = useState<RatePlan[]>([])
-  const [selectedSpot, setSelectedSpot] = useState<Spot | null>(null)
+  const [selectedSpotIds, setSelectedSpotIds] = useState<Set<string>>(() => new Set())
+  const selectedSpots = useMemo(
+    () => spots.filter((s) => selectedSpotIds.has(s.id)),
+    [spots, selectedSpotIds],
+  )
 
   const [gridStepM, setGridStepM] = useState(1)
   const [snapEnabled, setSnapEnabled] = useState(false)
@@ -127,6 +131,94 @@ export function FloorEditorPage() {
       reload()
     },
     [reload, undoStack],
+  )
+
+  const handleGroupDragEnd = useCallback(
+    async (moves: Array<{ spot: Spot; posX: number; posY: number }>) => {
+      const befores = moves.map(({ spot }) => ({
+        posX: spot.posX,
+        posY: spot.posY,
+        width: spot.width,
+        height: spot.height,
+        rotation: spot.rotation,
+      }))
+      const afters = moves.map(({ posX, posY }, i) => ({ ...befores[i], posX, posY }))
+      await Promise.all(moves.map(({ spot }, i) => updateSpotLayout(spot.id, afters[i])))
+      undoStack.push({
+        undo: async () => {
+          await Promise.all(moves.map(({ spot }, i) => updateSpotLayout(spot.id, befores[i])))
+          reload()
+        },
+        redo: async () => {
+          await Promise.all(moves.map(({ spot }, i) => updateSpotLayout(spot.id, afters[i])))
+          reload()
+        },
+      })
+      reload()
+    },
+    [reload, undoStack],
+  )
+
+  const handleSpotClick = useCallback((spot: Spot, event: MouseEvent) => {
+    const additive = event.shiftKey || event.metaKey || event.ctrlKey
+    setSelectedSpotIds((prev) => {
+      if (additive) {
+        const next = new Set(prev)
+        if (next.has(spot.id)) next.delete(spot.id)
+        else next.add(spot.id)
+        return next
+      }
+      return new Set([spot.id])
+    })
+  }, [])
+
+  const handleMarqueeSelect = useCallback((ids: string[], additive: boolean) => {
+    setSelectedSpotIds((prev) => {
+      if (!additive) return new Set(ids)
+      const next = new Set(prev)
+      for (const id of ids) next.add(id)
+      return next
+    })
+  }, [])
+
+  const handleDeleteMany = useCallback(
+    async (targets: Spot[]) => {
+      if (!floorId || targets.length === 0) return
+      const snapshots = targets.map((s) => ({
+        code: s.code,
+        vehicleType: s.vehicleType,
+        layout: { posX: s.posX, posY: s.posY, width: s.width, height: s.height, rotation: s.rotation },
+      }))
+      await Promise.all(targets.map((s) => deleteSpot(s.id)))
+      let currentIds: (string | null)[] = targets.map(() => null)
+      undoStack.push({
+        undo: async () => {
+          const created = await Promise.all(
+            snapshots.map((s) => createSpot(floorId, { code: s.code, vehicleType: s.vehicleType })),
+          )
+          currentIds = created.map((c) => c.id)
+          await Promise.all(created.map((c, i) => updateSpotLayout(c.id, snapshots[i].layout)))
+          reload()
+        },
+        redo: async () => {
+          await Promise.all(currentIds.filter((id): id is string => !!id).map((id) => deleteSpot(id)))
+          currentIds = currentIds.map(() => null)
+          reload()
+        },
+      })
+      setSelectedSpotIds(new Set())
+      reload()
+    },
+    [floorId, reload, undoStack],
+  )
+
+  const handleSetStatusMany = useCallback(
+    async (targets: Spot[], status: SpotStatus) => {
+      const eligible = targets.filter((s) => s.status !== 'OCCUPIED')
+      await Promise.all(eligible.map((s) => updateSpotStatus(s.id, status)))
+      reload()
+    },
+    [reload],
   )
 
   const onCreate = useCallback(
@@ -234,6 +326,30 @@ export function FloorEditorPage() {
     onDelete,
     onRescale,
   })
+
+  const setTool = useCallback(
+    (t: EditorTool) => {
+      editor.setTool(t)
+      if (t !== 'select') setSelectedSpotIds(new Set())
+    },
+    [editor],
+  )
+
+  useEffect(() => {
+    if (editor.tool !== 'select' || editor.selectedElementId || selectedSpotIds.size === 0) return
+    function onKeyDown(e: KeyboardEvent) {
+      const target = e.target as HTMLElement | null
+      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return
+      if (e.key === 'Escape') {
+        setSelectedSpotIds(new Set())
+      } else if (e.key === 'Backspace' || e.key === 'Delete') {
+        e.preventDefault()
+        void handleDeleteMany(selectedSpots)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [editor.tool, editor.selectedElementId, selectedSpotIds, selectedSpots, handleDeleteMany])
 
   const handleCreateSpot = useCallback(
     async (input: SpotInput) => {
@@ -391,7 +507,7 @@ export function FloorEditorPage() {
         <div className="flex min-h-[55vh] min-w-0 flex-col gap-2 p-4 md:min-h-0 md:flex-1 sm:p-6">
           <ToolStrip
             tool={editor.tool}
-            onPick={editor.setTool}
+            onPick={setTool}
             onFit={() => setFitToken((n) => n + 1)}
             boundaryExists={boundaryExists}
             undoStack={undoStack}
@@ -410,20 +526,23 @@ export function FloorEditorPage() {
                 <FloorMap
                   spots={spots}
                   elements={elements}
-                  selectedSpotId={selectedSpot?.id}
+                  selectedSpotIds={selectedSpotIds}
                   showGrid={showGrid}
                   showScaleBar={showScaleBar}
                   gridStepM={gridStepM}
                   fitToken={fitToken}
                   editor={editor}
                   spotRowTool={spotRow}
-                  onSpotClick={setSelectedSpot}
+                  onSpotClick={handleSpotClick}
                   onSpotDragEnd={handleDragEnd}
+                  onSpotGroupDragEnd={handleGroupDragEnd}
+                  onMarqueeSelect={handleMarqueeSelect}
+                  onCanvasClick={() => setSelectedSpotIds(new Set())}
                 />
                 <SelectHandle
                   active={editor.tool === 'select'}
                   editing={editor.tool === 'select' && editor.selectedElementId != null}
-                  onClick={() => editor.setTool('select')}
+                  onClick={() => setTool('select')}
                 />
               </>
             )}
@@ -443,26 +562,40 @@ export function FloorEditorPage() {
             onShowGrid={setShowGrid}
             showScaleBar={showScaleBar}
             onShowScaleBar={setShowScaleBar}
+            onSelectElement={(id) => {
+              setTool('select')
+              setSelectedSpotIds(new Set())
+              editor.selectElement(id)
+            }}
           />
           <hr className="border-slate-100" />
           {editor.tool === 'spotRow' && (
             <>
-              <SpotRowPanel tool={spotRow} onDone={() => editor.setTool('select')} />
+              <SpotRowPanel tool={spotRow} onDone={() => setTool('select')} />
               <hr className="border-slate-100" />
             </>
           )}
           <AddSpotForm onCreate={handleCreateSpot} />
           <hr className="border-slate-100" />
-          {selectedSpot ? (
+          {selectedSpots.length === 1 ? (
             <SpotEditor
-              key={selectedSpot.id}
-              spot={selectedSpot}
-              onClose={() => setSelectedSpot(null)}
+              key={selectedSpots[0].id}
+              spot={selectedSpots[0]}
+              onClose={() => setSelectedSpotIds(new Set())}
               onChanged={reload}
               pushUndo={undoStack.push}
             />
+          ) : selectedSpots.length > 1 ? (
+            <MultiSpotPanel
+              spots={selectedSpots}
+              onClose={() => setSelectedSpotIds(new Set())}
+              onSetStatus={(status) => handleSetStatusMany(selectedSpots, status)}
+              onDelete={() => handleDeleteMany(selectedSpots)}
+            />
           ) : (
-            <p className="text-sm text-slate-400">Click a bay to edit its size, rotation or status.</p>
+            <p className="text-sm text-slate-400">
+              Click a bay to edit it - shift/cmd-click or drag a rectangle to select several.
+            </p>
           )}
           <hr className="border-slate-100" />
           <RatePlansEditor floorId={floor.id} ratePlans={ratePlans} onCreated={reload} />
@@ -643,6 +776,7 @@ function PlanScalePanel({
   onShowGrid,
   showScaleBar,
   onShowScaleBar,
+  onSelectElement,
 }: {
   editor: FloorPlanEditorBag
   elements: FloorElement[]
@@ -654,6 +788,7 @@ function PlanScalePanel({
   onShowGrid: (b: boolean) => void
   showScaleBar: boolean
   onShowScaleBar: (b: boolean) => void
+  onSelectElement: (id: string) => void
 }) {
   const [actualLength, setActualLength] = useState('')
   const sel = editor.selectedElement
@@ -752,10 +887,7 @@ function PlanScalePanel({
           >
             <button
               type="button"
-              onClick={() => {
-                editor.setTool('select')
-                editor.selectElement(el.id)
-              }}
+              onClick={() => onSelectElement(el.id)}
               className="min-w-0 flex-1 text-left"
             >
               <span className="font-mono font-semibold uppercase tracking-[0.1em] text-slate-800">
@@ -1189,6 +1321,69 @@ function AddSpotForm({ onCreate }: { onCreate: (input: SpotInput) => Promise<voi
         Add bay — standard stall size for its type
       </button>
     </form>
+  )
+}
+
+function MultiSpotPanel({
+  spots,
+  onClose,
+  onSetStatus,
+  onDelete,
+}: {
+  spots: Spot[]
+  onClose: () => void
+  onSetStatus: (status: SpotStatus) => void
+  onDelete: () => void
+}) {
+  const anyOccupied = spots.some((s) => s.status === 'OCCUPIED')
+  return (
+    <div>
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="font-display text-sm font-semibold tracking-tight text-slate-900">
+          {spots.length} bays selected
+        </h2>
+        <button onClick={onClose} className="text-xs font-medium text-slate-400 hover:text-slate-600">
+          Close
+        </button>
+      </div>
+
+      <p className="mb-3 font-mono text-xs text-slate-500">
+        {spots.map((s) => s.code).join(', ')}
+      </p>
+
+      <div className="mb-4">
+        <label className="mb-1.5 block font-mono text-[10px] uppercase tracking-[0.14em] text-slate-400">
+          Status
+        </label>
+        <div className="flex flex-wrap gap-2">
+          {(['AVAILABLE', 'DISABLED', 'MAINTENANCE'] as SpotStatus[]).map((s) => (
+            <button
+              key={s}
+              onClick={() => onSetStatus(s)}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50"
+            >
+              <span
+                className="inline-block h-2.5 w-3.5 rounded-[2px] ring-1 ring-inset ring-white/70"
+                style={{ backgroundColor: SPOT_COLORS[s] }}
+              />
+              {s.charAt(0) + s.slice(1).toLowerCase()}
+            </button>
+          ))}
+        </div>
+        {anyOccupied && (
+          <p className="mt-1.5 text-[11px] leading-snug text-slate-500">
+            Occupied bays in the selection are skipped - use the map's check-out flow for those.
+          </p>
+        )}
+      </div>
+
+      <button
+        onClick={onDelete}
+        className="text-xs font-semibold text-red-600 hover:text-red-700"
+      >
+        Delete {spots.length} bays
+      </button>
+    </div>
   )
 }
 

@@ -28,6 +28,11 @@ export function MapPage() {
   const [selectedSpot, setSelectedSpot] = useState<Spot | null>(null)
   const [loading, setLoading] = useState(false)
 
+  const selectedSpotIds = useMemo(
+    () => (selectedSpot ? new Set([selectedSpot.id]) : undefined),
+    [selectedSpot],
+  )
+
   useEffect(() => {
     listParkingLots().then((data) => {
       setLots(data)
@@ -156,7 +161,7 @@ export function MapPage() {
               <FloorMap
                 spots={spots}
                 elements={elements}
-                selectedSpotId={selectedSpot?.id}
+                selectedSpotIds={selectedSpotIds}
                 showScaleBar
                 onSpotClick={setSelectedSpot}
               />
