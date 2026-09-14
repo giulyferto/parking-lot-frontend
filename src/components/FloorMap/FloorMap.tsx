@@ -1,44 +1,20 @@
 import { useEffect, useRef } from 'react'
 import * as d3 from 'd3'
 import type { FloorElement, Spot } from '../../types'
-import { SPOT_COLORS, SPOT_LABEL_COLOR, SPOT_SELECTED_STROKE, SPOT_STROKE } from './spotColors'
-import {
-  EDIT_HANDLE_FILL,
-  EDIT_HANDLE_RADIUS_PX,
-  GRID_STROKE,
-  RUBBER_BAND_STROKE,
-  RULER_STROKE,
-  SCALE_BAR_COLOR,
-  ZOOM_SCALE_EXTENT,
-} from './floorElementStyles'
-import {
-  bboxesIntersect,
-  bboxOfGeometry,
-  bboxOfSpot,
-  bboxOfSpots,
-  distance,
-  formatMeters,
-  niceScaleBarLength,
-  setVertex,
-  unionBbox,
-  type Bbox,
-  type Point,
-  type SpotRowPlacement,
-} from './geometry'
-import { renderElement } from './floorElements'
+import { GRID_STROKE, ZOOM_SCALE_EXTENT } from './floorElementStyles'
+import { bboxOfGeometry, bboxOfSpots, unionBbox, type Bbox, type Point } from './geometry'
 import type { FloorPlanEditorBag } from './useFloorPlanEditor'
 import type { SpotRowToolBag } from './useSpotRowTool'
+import { drawChrome } from './floorMap/chrome'
+import { drawOverlay } from './floorMap/overlay'
+import { renderElementsLayer } from './floorMap/elementsLayer'
+import { bindHitLayer } from './floorMap/hitLayer'
+import { renderSpotsLayer } from './floorMap/spotsLayer'
+import type { ViewBox } from './floorMap/types'
 
 const PADDING_M = 3
 const MIN_VIEW_W_M = 40
 const MIN_VIEW_H_M = 28
-
-interface ViewBox {
-  x: number
-  y: number
-  w: number
-  h: number
-}
 
 interface FloorMapProps {
   spots: Spot[]
@@ -56,12 +32,6 @@ interface FloorMapProps {
   editor?: FloorPlanEditorBag
   spotRowTool?: SpotRowToolBag
   className?: string
-}
-
-function polyD(pts: Point[], close: boolean): string {
-  if (pts.length === 0) return ''
-  const [h, ...rest] = pts
-  return `M${h[0]},${h[1]}` + rest.map((p) => `L${p[0]},${p[1]}`).join('') + (close ? 'Z' : '')
 }
 
 export function FloorMap({
@@ -142,293 +112,19 @@ export function FloorMap({
     const overlay = viewport.select<SVGGElement>('g.overlay')
     const chrome = svg.select<SVGGElement>('g.chrome')
 
-    function drawChrome(k: number) {
-      chrome.selectAll('*').remove()
-      if (!showScaleBar) return
-      const len = niceScaleBarLength(vb.w / k)
-      const barUnits = len * k // chrome units are pre-zoom meters
-      const x0 = vb.x + vb.w * 0.04
-      const y0 = vb.y + vb.h - vb.h * 0.06
-      const tick = 6 / viewToPx
-      const font = 11 / viewToPx
-      const g = chrome.append('g')
-      g.append('line')
-        .attr('x1', x0)
-        .attr('y1', y0)
-        .attr('x2', x0 + barUnits)
-        .attr('y2', y0)
-        .attr('stroke', SCALE_BAR_COLOR)
-        .attr('stroke-width', 2)
-        .style('vector-effect', 'non-scaling-stroke')
-      for (const x of [x0, x0 + barUnits]) {
-        g.append('line')
-          .attr('x1', x)
-          .attr('y1', y0 - tick)
-          .attr('x2', x)
-          .attr('y2', y0 + tick)
-          .attr('stroke', SCALE_BAR_COLOR)
-          .attr('stroke-width', 2)
-          .style('vector-effect', 'non-scaling-stroke')
-      }
-      g.append('text')
-        .attr('x', x0 + barUnits / 2)
-        .attr('y', y0 - tick - font * 0.4)
-        .attr('text-anchor', 'middle')
-        .attr('font-family', '"IBM Plex Mono", ui-monospace, monospace')
-        .attr('font-size', font)
-        .attr('fill', SCALE_BAR_COLOR)
-        .attr('stroke', 'rgba(255,255,255,0.85)')
-        .attr('stroke-width', font * 0.28)
-        .style('paint-order', 'stroke')
-        .text(`${len} m`)
-    }
+    const redrawChrome = (k: number) => drawChrome(chrome, vb, viewToPx, showScaleBar, k)
+    const redrawOverlay = (k: number) =>
+      drawOverlay(overlay, viewport, dragContainer, k, {
+        editor,
+        spotRowTool,
+        cursor: cursorRef.current,
+        boundary,
+        viewToPx,
+        pxToMeters,
+      })
 
-    function drawOverlay(k: number) {
-      overlay.selectAll('*').remove()
-      if (!editor) return
-      const handleR = pxToMeters(EDIT_HANDLE_RADIUS_PX, k)
-      const d = editor.draft
-
-      if (d?.mode === 'shape') {
-        const raw = cursorRef.current
-        const cur = raw ? editor.snapDraftPoint(raw) : null
-        const preview = cur ? [...d.vertices, cur] : d.vertices
-        if (preview.length >= 2) {
-          overlay
-            .append('path')
-            .attr('d', polyD(preview, d.geomType === 'Polygon' && preview.length > 2))
-            .attr('fill', d.geomType === 'Polygon' ? 'rgba(37,99,235,0.08)' : 'none')
-            .attr('stroke', RUBBER_BAND_STROKE)
-            .attr('stroke-width', 1.5)
-            .attr('stroke-dasharray', '4 3')
-            .style('vector-effect', 'non-scaling-stroke')
-
-          const font = pxToMeters(12, k)
-          const off = pxToMeters(11, k)
-          for (let i = 1; i < preview.length; i++) {
-            const a = preview[i - 1]
-            const b = preview[i]
-            const len = distance(a, b)
-            if (len < 1e-4) continue
-            const nx = -(b[1] - a[1]) / len
-            const ny = (b[0] - a[0]) / len
-            const live = i === preview.length - 1 && !!cur
-            overlay
-              .append('text')
-              .attr('x', (a[0] + b[0]) / 2 + nx * off)
-              .attr('y', (a[1] + b[1]) / 2 + ny * off)
-              .attr('text-anchor', 'middle')
-              .attr('dominant-baseline', 'central')
-              .attr('font-family', '"IBM Plex Mono", ui-monospace, monospace')
-              .attr('font-size', font)
-              .attr('font-weight', live ? 700 : 600)
-              .attr('fill', live ? RUBBER_BAND_STROKE : 'rgba(37,99,235,0.6)')
-              .attr('stroke', 'rgba(255,255,255,0.9)')
-              .attr('stroke-width', font * 0.24)
-              .style('paint-order', 'stroke')
-              .text(formatMeters(len))
-          }
-        }
-        overlay
-          .selectAll('circle.dv')
-          .data(d.vertices)
-          .enter()
-          .append('circle')
-          .attr('class', 'dv')
-          .attr('cx', (p) => p[0])
-          .attr('cy', (p) => p[1])
-          .attr('r', handleR)
-          .attr('fill', EDIT_HANDLE_FILL)
-        // Hollow ring at the pending next point.
-        if (cur) {
-          overlay
-            .append('circle')
-            .attr('cx', cur[0])
-            .attr('cy', cur[1])
-            .attr('r', handleR * 1.5)
-            .attr('fill', 'none')
-            .attr('stroke', RUBBER_BAND_STROKE)
-            .attr('stroke-width', 1.5)
-            .style('vector-effect', 'non-scaling-stroke')
-        }
-      }
-
-      const sel = editor.selectedElement
-      if (sel && editor.tool === 'select') {
-        const coords =
-          sel.geometry.type === 'Point' ? [sel.geometry.coordinates] : sel.geometry.coordinates
-        const isPoint = sel.geometry.type === 'Point'
-        const handles = overlay
-          .selectAll('circle.sv')
-          .data(coords.map((c, i) => ({ c: c as Point, i })))
-          .enter()
-          .append('circle')
-          .attr('class', 'sv')
-          .attr('cx', (h) => h.c[0])
-          .attr('cy', (h) => h.c[1])
-          .attr('r', handleR * 1.15)
-          .attr('fill', '#fff')
-          .attr('stroke', EDIT_HANDLE_FILL)
-          .attr('stroke-width', 2)
-          .style('vector-effect', 'non-scaling-stroke')
-          .style('pointer-events', 'all')
-          .style('cursor', 'pointer')
-        const elLayer = viewport.select<SVGGElement>('g.elements')
-        const renderLive = (geom: typeof sel.geometry) =>
-          elLayer
-            .selectAll<SVGGElement, FloorElement>('g.element')
-            .filter((d) => d.id === sel.id)
-            .datum({ ...sel, geometry: geom })
-            .call(renderElement, {
-              effectivePxPerMeter: viewToPx * k,
-              selectedId: sel.id,
-              interactive: true,
-              boundary,
-            })
-        const vertexDrag = d3
-          .drag<SVGCircleElement, { c: Point; i: number }>()
-          .container(dragContainer)
-          .on('start', (event) => event.sourceEvent.stopPropagation())
-          .on('drag', function (event, h) {
-            d3.select(this).attr('cx', event.x).attr('cy', event.y)
-            renderLive(setVertex(sel.geometry, isPoint ? 0 : h.i, [event.x, event.y]))
-          })
-          .on('end', (event, h) => editor.endVertexDrag(sel.id, isPoint ? 0 : h.i, [event.x, event.y]))
-        handles.call(vertexDrag)
-      }
-
-      if (d?.mode === 'ruler') {
-        const [a, b] = d.points
-        overlay
-          .append('line')
-          .attr('class', 'ruler')
-          .attr('x1', a[0])
-          .attr('y1', a[1])
-          .attr('x2', b[0])
-          .attr('y2', b[1])
-          .attr('stroke', RULER_STROKE)
-          .attr('stroke-width', 2)
-          .style('vector-effect', 'non-scaling-stroke')
-        const font = pxToMeters(12, k)
-        overlay
-          .append('text')
-          .attr('class', 'ruler-label')
-          .attr('x', (a[0] + b[0]) / 2)
-          .attr('y', (a[1] + b[1]) / 2 - font)
-          .attr('text-anchor', 'middle')
-          .attr('font-family', '"IBM Plex Mono", ui-monospace, monospace')
-          .attr('font-size', font)
-          .attr('fill', RULER_STROKE)
-          .attr('stroke', 'rgba(255,255,255,0.9)')
-          .attr('stroke-width', font * 0.22)
-          .style('paint-order', 'stroke')
-          .text(formatMeters(distance(a, b)))
-        const ends = overlay
-          .selectAll('circle.re')
-          .data([0, 1] as const)
-          .enter()
-          .append('circle')
-          .attr('class', 're')
-          .attr('cx', (i) => d.points[i][0])
-          .attr('cy', (i) => d.points[i][1])
-          .attr('r', handleR * 1.3)
-          .attr('fill', '#fff')
-          .attr('stroke', RULER_STROKE)
-          .attr('stroke-width', 2)
-          .style('vector-effect', 'non-scaling-stroke')
-          .style('pointer-events', 'all')
-          .style('cursor', 'pointer')
-        const rulerDrag = d3
-          .drag<SVGCircleElement, 0 | 1>()
-          .container(dragContainer)
-          .on('start', (event) => event.sourceEvent.stopPropagation())
-          .on('drag', function (event, i) {
-            d3.select(this).attr('cx', event.x).attr('cy', event.y)
-            overlay
-              .select('line.ruler')
-              .attr(i === 0 ? 'x1' : 'x2', event.x)
-              .attr(i === 0 ? 'y1' : 'y2', event.y)
-          })
-          .on('end', (event, i) => editor.moveRulerEnd(i, [event.x, event.y]))
-        ends.call(rulerDrag)
-      }
-
-      // "Parking row" tool: dashed baseline + a dashed preview rect per stall,
-      // plus draggable baseline endpoints once the row is placed. Mirrors the
-      // ruler above; all sizes are meters, strokes non-scaling.
-      const rt = spotRowTool
-      if (rt?.active && rt.baseline) {
-        const { p0, p1 } = rt.baseline
-        const g = overlay.append('g').attr('class', 'row-preview')
-        g.append('line')
-          .attr('x1', p0[0])
-          .attr('y1', p0[1])
-          .attr('x2', p1[0])
-          .attr('y2', p1[1])
-          .attr('stroke', SPOT_SELECTED_STROKE)
-          .attr('stroke-width', 1.5)
-          .attr('stroke-dasharray', '4 3')
-          .style('vector-effect', 'non-scaling-stroke')
-        g.selectAll<SVGRectElement, SpotRowPlacement>('rect.row-cell')
-          .data(rt.placements)
-          .enter()
-          .append('rect')
-          .attr('class', 'row-cell')
-          .attr('transform', (p) => `translate(${p.posX},${p.posY}) rotate(${p.rotation})`)
-          .attr('x', (p) => -p.width / 2)
-          .attr('y', (p) => -p.height / 2)
-          .attr('width', (p) => p.width)
-          .attr('height', (p) => p.height)
-          .attr('rx', 0.15)
-          .attr('fill', 'rgba(37,99,235,0.08)')
-          .attr('stroke', SPOT_SELECTED_STROKE)
-          .attr('stroke-width', 1.5)
-          .attr('stroke-dasharray', '4 3')
-          .style('vector-effect', 'non-scaling-stroke')
-        const rowFont = pxToMeters(12, k)
-        g.append('text')
-          .attr('x', (p0[0] + p1[0]) / 2)
-          .attr('y', (p0[1] + p1[1]) / 2 - rowFont)
-          .attr('text-anchor', 'middle')
-          .attr('font-family', '"IBM Plex Mono", ui-monospace, monospace')
-          .attr('font-size', rowFont)
-          .attr('fill', SPOT_SELECTED_STROKE)
-          .attr('stroke', 'rgba(255,255,255,0.9)')
-          .attr('stroke-width', rowFont * 0.22)
-          .style('paint-order', 'stroke')
-          .text(`${rt.placements.length} ${rt.placements.length === 1 ? 'bay' : 'bays'}`)
-        if (rt.phase === 'ready') {
-          const pts: [Point, Point] = [p0, p1]
-          const rowEnds = g
-            .selectAll<SVGCircleElement, 0 | 1>('circle.rb')
-            .data([0, 1] as const)
-            .enter()
-            .append('circle')
-            .attr('class', 'rb')
-            .attr('cx', (i) => pts[i][0])
-            .attr('cy', (i) => pts[i][1])
-            .attr('r', handleR * 1.3)
-            .attr('fill', '#fff')
-            .attr('stroke', SPOT_SELECTED_STROKE)
-            .attr('stroke-width', 2)
-            .style('vector-effect', 'non-scaling-stroke')
-            .style('pointer-events', 'all')
-            .style('cursor', 'pointer')
-          const rowDrag = d3
-            .drag<SVGCircleElement, 0 | 1>()
-            .container(dragContainer)
-            .on('start', (event) => event.sourceEvent.stopPropagation())
-            .on('drag', function (event) {
-              d3.select(this).attr('cx', event.x).attr('cy', event.y)
-            })
-            .on('end', (event, i) => rt.moveBaselineEnd(i, [event.x, event.y]))
-          rowEnds.call(rowDrag)
-        }
-      }
-    }
-
-    // 4. Pan/zoom. Recreated each run so its closures see fresh props; the
-    //    transform itself lives on the DOM node and survives re-runs.
+    // Pan/zoom. Recreated each run so its closures see fresh props; the
+    // transform itself lives on the DOM node and survives re-runs.
     const zoom = d3
       .zoom<SVGSVGElement, unknown>()
       .scaleExtent(ZOOM_SCALE_EXTENT)
@@ -439,8 +135,8 @@ export function FloorMap({
       })
       .on('zoom', (event) => {
         viewport.attr('transform', event.transform.toString())
-        drawChrome(event.transform.k)
-        drawOverlay(event.transform.k)
+        redrawChrome(event.transform.k)
+        redrawOverlay(event.transform.k)
       })
     svg.call(zoom).on('dblclick.zoom', null)
 
@@ -468,289 +164,36 @@ export function FloorMap({
       .attr('height', vb.h + gpad * 2)
       .attr('display', showGrid ? null : 'none')
 
-    const elJoin = viewport
-      .select<SVGGElement>('g.elements')
-      .selectAll<SVGGElement, FloorElement>('g.element')
-      .data(els, (d) => d.id)
-    elJoin.exit().remove()
-    const elMerged = elJoin.enter().append('g').attr('class', 'element').merge(elJoin)
-    elMerged.style('pointer-events', editor && editor.tool === 'select' ? 'auto' : 'none')
-    renderElement(elMerged, {
+    renderElementsLayer(viewport, dragContainer, els, {
       effectivePxPerMeter: viewToPx * k0,
-      selectedId: editor?.selectedElementId,
-      interactive: !!editor,
+      editor,
       boundary,
     })
-    if (editor && editor.tool === 'select') {
-      elMerged.style('cursor', 'move').on('click', (event, d) => {
-        event.stopPropagation()
-        editor.selectElement(d.id)
-      })
-      const bodyDrag = d3
-        .drag<SVGGElement, FloorElement>()
-        .container(dragContainer)
-        .on('start', (event) => event.sourceEvent.stopPropagation())
-        .on('drag', function (event) {
-          const node = this as SVGGElement & { __dx?: number; __dy?: number }
-          node.__dx = (node.__dx ?? 0) + event.dx
-          node.__dy = (node.__dy ?? 0) + event.dy
-          d3.select(this).attr('transform', `translate(${node.__dx},${node.__dy})`)
-        })
-        .on('end', function (_event, d) {
-          const node = this as SVGGElement & { __dx?: number; __dy?: number }
-          const dx = node.__dx ?? 0
-          const dy = node.__dy ?? 0
-          node.__dx = 0
-          node.__dy = 0
-          d3.select(this).attr('transform', null)
-          editor.endElementDrag(d.id, dx, dy)
-        })
-      elMerged.call(bodyDrag)
-    } else {
-      elMerged.on('.drag', null).on('click', null).style('cursor', null)
-    }
 
-    const hitPad = (Math.max(vb.w, vb.h) * 3) / ZOOM_SCALE_EXTENT[0]
     const hit = viewport.select<SVGRectElement>('rect.hit')
-    hit
-      .attr('x', vb.x - hitPad)
-      .attr('y', vb.y - hitPad)
-      .attr('width', vb.w + hitPad * 2)
-      .attr('height', vb.h + hitPad * 2)
-      .attr('fill', 'transparent')
-      .style('pointer-events', editor ? 'all' : 'none')
-    if (editor) {
-      const activeEditor = editor
-      const rowActive = !!spotRowTool?.active
-      const placing = activeEditor.tool !== 'select'
-      const place = (event: MouseEvent) => {
-        const [mx, my] = d3.pointer(event, viewportNode)
-        if (rowActive && spotRowTool) spotRowTool.canvasClick([mx, my])
-        else activeEditor.canvasClick([mx, my])
-      }
-      hit
-        .style('cursor', placing ? 'crosshair' : 'default')
-        .on('mousemove', (event: MouseEvent) => {
-          const world = d3.pointer(event, viewportNode) as Point
-          cursorRef.current = world
-          if (activeEditor.draft?.mode === 'shape') drawOverlay(d3.zoomTransform(svgEl).k || 1)
-          if (rowActive && spotRowTool?.baseline) {
-            spotRowTool.handlePointerMove(world)
-            drawOverlay(d3.zoomTransform(svgEl).k || 1)
-          }
-        })
-        .on('dblclick', (event: MouseEvent) => {
-          event.preventDefault()
-          activeEditor.canvasDblClick()
-        })
-      if (placing) {
-        hit.on('.drag', null).on('click', null).on('mousedown', (event: MouseEvent) => {
-          if (event.button !== 0) return
-          event.preventDefault()
-          place(event)
-        })
-      } else if (onMarqueeSelect) {
-        let marqueeStart: Point | null = null
-        let marqueeMoved = false
-        const moveThreshold = pxToMeters(4, d3.zoomTransform(svgEl).k || 1)
-        const marqueeDrag = d3
-          .drag<SVGRectElement, unknown>()
-          .container(dragContainer)
-          .on('start', (event) => {
-            marqueeStart = [event.x, event.y]
-            marqueeMoved = false
-          })
-          .on('drag', (event) => {
-            if (!marqueeStart) return
-            if (!marqueeMoved && distance(marqueeStart, [event.x, event.y]) > moveThreshold) {
-              marqueeMoved = true
-            }
-            if (!marqueeMoved) return
-            const x0 = Math.min(marqueeStart[0], event.x)
-            const y0 = Math.min(marqueeStart[1], event.y)
-            const w = Math.abs(event.x - marqueeStart[0])
-            const h = Math.abs(event.y - marqueeStart[1])
-            let rect = overlay.select<SVGRectElement>('rect.marquee')
-            if (rect.empty()) {
-              rect = overlay
-                .append('rect')
-                .attr('class', 'marquee')
-                .attr('fill', 'rgba(37,99,235,0.08)')
-                .attr('stroke', RUBBER_BAND_STROKE)
-                .attr('stroke-width', 1.5)
-                .attr('stroke-dasharray', '4 3')
-                .style('vector-effect', 'non-scaling-stroke')
-            }
-            rect.attr('x', x0).attr('y', y0).attr('width', w).attr('height', h)
-          })
-          .on('end', (event) => {
-            const start = marqueeStart
-            marqueeStart = null
-            overlay.select('rect.marquee').remove()
-            const additive = !!(event.sourceEvent as MouseEvent).shiftKey || !!(event.sourceEvent as MouseEvent).metaKey || !!(event.sourceEvent as MouseEvent).ctrlKey
-            if (!marqueeMoved || !start) {
-              place(event.sourceEvent as MouseEvent)
-              onCanvasClick?.()
-              return
-            }
-            const box: Bbox = {
-              minX: Math.min(start[0], event.x),
-              minY: Math.min(start[1], event.y),
-              maxX: Math.max(start[0], event.x),
-              maxY: Math.max(start[1], event.y),
-            }
-            const ids = spots.filter((s) => bboxesIntersect(bboxOfSpot(s), box)).map((s) => s.id)
-            onMarqueeSelect(ids, additive)
-          })
-        hit.on('mousedown', null).on('click', null).call(marqueeDrag)
-      } else {
-        hit.on('.drag', null).on('mousedown', null).on('click', (event: MouseEvent) => place(event))
-      }
-    } else {
-      hit.on('.drag', null).on('mousedown', null).on('click', null).on('mousemove', null).on('dblclick', null)
-    }
+    bindHitLayer(hit, overlay, dragContainer, viewportNode, svgEl, {
+      vb,
+      spots,
+      pxToMeters,
+      cursorRef,
+      redrawOverlay,
+      editor,
+      spotRowTool,
+      onMarqueeSelect,
+      onCanvasClick,
+    })
 
-    const groups = viewport
-      .select<SVGGElement>('g.spots')
-      .selectAll<SVGGElement, Spot>('g.spot')
-      .data(spots, (d) => d.id)
+    renderSpotsLayer(viewport, dragContainer, spots, {
+      selectedSpotIds,
+      selectMode,
+      labelFont: 11 / (viewToPx * k0),
+      onSpotClick,
+      onSpotDragEnd,
+      onSpotGroupDragEnd,
+    })
 
-    groups.exit().remove()
-
-    const entered = groups
-      .enter()
-      .append('g')
-      .attr('class', 'spot')
-      .style('cursor', onSpotClick || onSpotDragEnd ? 'pointer' : 'default')
-
-    entered
-      .append('rect')
-      .attr('class', 'spot-rect')
-      .attr('rx', 0.25)
-      .style('transition', 'fill 200ms ease')
-      .style('vector-effect', 'non-scaling-stroke')
-      .attr('filter', 'url(#spot-shadow)')
-    entered
-      .append('rect')
-      .attr('class', 'spot-paint')
-      .attr('fill', 'none')
-      .attr('pointer-events', 'none')
-      .style('vector-effect', 'non-scaling-stroke')
-    entered
-      .append('text')
-      .attr('class', 'spot-label')
-      .attr('text-anchor', 'middle')
-      .attr('dominant-baseline', 'central')
-      .attr('font-family', '"IBM Plex Mono", ui-monospace, monospace')
-      .attr('font-weight', 600)
-      .attr('fill', SPOT_LABEL_COLOR)
-      .attr('stroke', 'rgba(255,255,255,0.85)')
-      .style('paint-order', 'stroke')
-      .attr('pointer-events', 'none')
-
-    const merged = entered.merge(groups)
-    const labelFont = 11 / (viewToPx * k0)
-
-    type DragNode = SVGGElement & { __groupIds?: ReadonlySet<string> | null; __moved?: boolean }
-    const drag = d3
-      .drag<SVGGElement, Spot>()
-      .container(dragContainer)
-      .subject((_event, d) => ({ x: d.posX, y: d.posY }))
-      .on('start', function (event, d) {
-        event.sourceEvent.stopPropagation()
-        const node = this as DragNode
-        node.__moved = false
-        const grouped = !!selectedSpotIds && selectedSpotIds.size > 1 && selectedSpotIds.has(d.id)
-        node.__groupIds = grouped ? selectedSpotIds! : null
-      })
-      .on('drag', function (event, d) {
-        const node = this as DragNode
-        if (!node.__moved) {
-          node.__moved = true
-          const nodes = node.__groupIds ? merged.filter((s) => node.__groupIds!.has(s.id)) : d3.select(this)
-          nodes.raise().classed('is-dragging', true)
-        }
-        const dx = event.x - d.posX
-        const dy = event.y - d.posY
-        if (node.__groupIds) {
-          merged
-            .filter((s) => node.__groupIds!.has(s.id))
-            .attr(
-              'transform',
-              (s) => `translate(${s.posX + dx}, ${s.posY + dy}) rotate(${s.rotation})`,
-            )
-        } else {
-          d3.select(this).attr('transform', `translate(${event.x}, ${event.y}) rotate(${d.rotation})`)
-        }
-      })
-      .on('end', function (event, d) {
-        const node = this as DragNode
-        const groupIds = node.__groupIds
-        const moved = node.__moved
-        node.__groupIds = null
-        node.__moved = false
-        if (!moved) return 
-        if (groupIds) {
-          const dx = event.x - d.posX
-          const dy = event.y - d.posY
-          merged.filter((s) => groupIds.has(s.id)).classed('is-dragging', false)
-          const moves = spots
-            .filter((s) => groupIds.has(s.id))
-            .map((s) => ({
-              spot: s,
-              posX: s.id === d.id ? event.x : s.posX + dx,
-              posY: s.id === d.id ? event.y : s.posY + dy,
-            }))
-          onSpotGroupDragEnd?.(moves)
-        } else {
-          d3.select(this).classed('is-dragging', false)
-          onSpotDragEnd?.(d, event.x, event.y)
-        }
-      })
-
-    merged
-      .attr('transform', (d) => `translate(${d.posX}, ${d.posY}) rotate(${d.rotation})`)
-      .on('click', (event: MouseEvent, d) => onSpotClick?.(d, event))
-    if (selectMode) merged.style('pointer-events', null)
-    else merged.style('pointer-events', 'none')
-
-    if (onSpotDragEnd && selectMode) {
-      merged.call(drag)
-    } else {
-      merged.on('.drag', null)
-    }
-
-    merged
-      .select<SVGRectElement>('rect.spot-rect')
-      .attr('x', (d) => -d.width / 2)
-      .attr('y', (d) => -d.height / 2)
-      .attr('width', (d) => d.width)
-      .attr('height', (d) => d.height)
-      .attr('fill', (d) => SPOT_COLORS[d.status])
-      .attr('fill-opacity', (d) => (d.status === 'DISABLED' ? 0.55 : 0.9))
-      .attr('stroke', (d) => (selectedSpotIds?.has(d.id) ? SPOT_SELECTED_STROKE : 'rgba(15,23,42,0.12)'))
-      .attr('stroke-width', (d) => (selectedSpotIds?.has(d.id) ? 2.5 : 1))
-
-    merged
-      .select<SVGRectElement>('rect.spot-paint')
-      .attr('x', (d) => -d.width / 2 + 0.18)
-      .attr('y', (d) => -d.height / 2 + 0.18)
-      .attr('width', (d) => Math.max(d.width - 0.36, 0))
-      .attr('height', (d) => Math.max(d.height - 0.36, 0))
-      .attr('rx', 0.15)
-      .attr('stroke', SPOT_STROKE)
-      .attr('stroke-width', 1.5)
-      .attr('stroke-opacity', 0.7)
-      .attr('stroke-dasharray', (d) => (d.status === 'MAINTENANCE' ? '4 3' : null))
-
-    merged
-      .select<SVGTextElement>('text.spot-label')
-      .attr('font-size', labelFont)
-      .attr('stroke-width', labelFont * 0.28)
-      .text((d) => d.code)
-
-    drawChrome(k0)
-    drawOverlay(k0)
+    redrawChrome(k0)
+    redrawOverlay(k0)
   }, [
     spots,
     elements,
