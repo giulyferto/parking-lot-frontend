@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { getFloor } from '../../api/floors'
 import { listSpots } from '../../api/spots'
-import { listRatePlans } from '../../api/ratePlans'
 import { listFloorElements } from '../../api/floorElements'
 import { FloorMap } from '../../components/FloorMap/FloorMap'
 import { useFloorPlanEditor, type EditorTool } from '../../components/FloorMap/useFloorPlanEditor'
@@ -10,19 +9,17 @@ import { useSpotRowTool } from '../../components/FloorMap/useSpotRowTool'
 import { useUndoStack } from './useUndoStack'
 import { AddSpotForm, MultiSpotPanel, SpotEditor } from './floorEditorPage/SpotPanels'
 import { PlanScalePanel } from './floorEditorPage/PlanScalePanel'
-import { RatePlansEditor } from './floorEditorPage/RatePlansEditor'
 import { SelectHandle, ToolHint, ToolStrip } from './floorEditorPage/Toolbar'
 import { SpotRowPanel } from './floorEditorPage/SpotRowPanel'
 import { useFloorElementActions } from './floorEditorPage/useFloorElementActions'
 import { useSpotActions } from './floorEditorPage/useSpotActions'
-import type { Floor, FloorElement, RatePlan, Spot, SpotStatus } from '../../types'
+import type { Floor, FloorElement, Spot, SpotStatus } from '../../types'
 
 export function FloorEditorPage() {
   const { floorId } = useParams<{ floorId: string }>()
   const [floor, setFloor] = useState<Floor | null>(null)
   const [spots, setSpots] = useState<Spot[]>([])
   const [elements, setElements] = useState<FloorElement[]>([])
-  const [ratePlans, setRatePlans] = useState<RatePlan[]>([])
   const [selectedSpotIds, setSelectedSpotIds] = useState<Set<string>>(() => new Set())
   const selectedSpots = useMemo(
     () => spots.filter((s) => selectedSpotIds.has(s.id)),
@@ -34,13 +31,13 @@ export function FloorEditorPage() {
   const [showGrid, setShowGrid] = useState(false)
   const [showScaleBar, setShowScaleBar] = useState(true)
   const [fitToken, setFitToken] = useState(0)
+  const [rowSetupOpen, setRowSetupOpen] = useState(false)
 
   const reload = useCallback(() => {
     if (!floorId) return
     getFloor(floorId).then(setFloor)
     listSpots(floorId).then(setSpots)
     listFloorElements(floorId).then(setElements)
-    listRatePlans(floorId).then(setRatePlans)
   }, [floorId])
 
   useEffect(() => reload(), [reload])
@@ -103,6 +100,7 @@ export function FloorEditorPage() {
     (t: EditorTool) => {
       editor.setTool(t)
       if (t !== 'select') setSelectedSpotIds(new Set())
+      if (t !== 'spotRow') setRowSetupOpen(false)
     },
     [editor],
   )
@@ -153,19 +151,27 @@ export function FloorEditorPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b border-slate-200 bg-white px-4 py-3 sm:px-6">
+      <div className="flex items-start justify-between gap-4 border-b border-slate-200 bg-white px-4 py-3 sm:px-6">
+        <div>
+          <Link
+            to={`/admin/parking-lots/${floor.parkingLotId}`}
+            className="text-sm font-medium text-blue-600 hover:text-blue-700"
+          >
+            ← Back to floors
+          </Link>
+          <h1 className="mt-0.5 font-display text-xl font-semibold tracking-tight text-slate-900">
+            {floor.name}
+            <span className="ml-2 font-mono text-xs uppercase tracking-[0.16em] text-slate-400">
+              Plan &amp; layout
+            </span>
+          </h1>
+        </div>
         <Link
-          to={`/admin/parking-lots/${floor.parkingLotId}`}
-          className="text-sm font-medium text-blue-600 hover:text-blue-700"
+          to={`/admin/floors/${floor.id}/rates`}
+          className="mt-0.5 shrink-0 text-sm font-medium text-blue-600 hover:text-blue-700"
         >
-          ← Back to floors
+          Rate plans →
         </Link>
-        <h1 className="mt-0.5 font-display text-xl font-semibold tracking-tight text-slate-900">
-          {floor.name}
-          <span className="ml-2 font-mono text-xs uppercase tracking-[0.16em] text-slate-400">
-            Plan, layout &amp; rates
-          </span>
-        </h1>
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto md:flex-row md:overflow-hidden">
@@ -177,6 +183,9 @@ export function FloorEditorPage() {
             boundaryExists={boundaryExists}
             undoStack={undoStack}
             rowBusy={spotRow.busy}
+            spotRow={spotRow}
+            rowSetupOpen={rowSetupOpen}
+            onRowSetupOpenChange={setRowSetupOpen}
           />
           <div className="deck-grid relative h-full min-h-[24rem] w-full overflow-hidden rounded-xl border border-slate-200 md:min-h-0">
             {spots.length === 0 && elements.length === 0 && editor.tool === 'select' ? (
@@ -236,7 +245,11 @@ export function FloorEditorPage() {
           <hr className="border-slate-100" />
           {editor.tool === 'spotRow' && (
             <>
-              <SpotRowPanel tool={spotRow} onDone={() => setTool('select')} />
+              <SpotRowPanel
+                tool={spotRow}
+                onDone={() => setTool('select')}
+                onEditSetup={() => setRowSetupOpen(true)}
+              />
               <hr className="border-slate-100" />
             </>
           )}
@@ -262,8 +275,6 @@ export function FloorEditorPage() {
               Click a bay to edit it - shift/cmd-click or drag a rectangle to select several.
             </p>
           )}
-          <hr className="border-slate-100" />
-          <RatePlansEditor floorId={floor.id} ratePlans={ratePlans} onCreated={reload} />
         </aside>
       </div>
     </div>

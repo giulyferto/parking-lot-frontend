@@ -7,6 +7,7 @@ import { MapPage } from './pages/MapPage'
 import { ParkingLotsPage } from './pages/admin/ParkingLotsPage'
 import { ParkingLotDetailPage } from './pages/admin/ParkingLotDetailPage'
 import { FloorEditorPage } from './pages/admin/FloorEditorPage'
+import { FloorRatesPage } from './pages/admin/FloorRatesPage'
 import { UsersPage } from './pages/admin/UsersPage'
 
 export default function App() {
@@ -43,6 +44,14 @@ export default function App() {
             element={
               <ProtectedRoute adminOnly>
                 <FloorEditorPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/floors/:floorId/rates"
+            element={
+              <ProtectedRoute adminOnly>
+                <FloorRatesPage />
               </ProtectedRoute>
             }
           />

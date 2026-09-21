@@ -45,7 +45,7 @@ export function RatePlansEditor({
 
   return (
     <div>
-      <Eyebrow className="mb-3">Rate plans</Eyebrow>
+      <Eyebrow className="mb-3">Existing plans</Eyebrow>
       <ul className="mb-3 space-y-1.5">
         {ratePlans.map((plan) => (
           <li
@@ -65,6 +65,7 @@ export function RatePlansEditor({
           <li className="text-xs text-slate-400">No rate plans yet.</li>
         )}
       </ul>
+      <Eyebrow className="mb-3 mt-5">New rate plan</Eyebrow>
       <form onSubmit={handleSubmit} className="space-y-2">
         <select
           value={vehicleType}

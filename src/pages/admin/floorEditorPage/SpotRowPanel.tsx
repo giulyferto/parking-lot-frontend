@@ -1,20 +1,17 @@
-import {
-  AISLE_WIDTH_BY_ANGLE_M,
-  ROW_PARK_ANGLES,
-} from '../../../components/FloorMap/spotDimensions'
+import { aisleWidthForAngle } from '../../../components/FloorMap/spotDimensions'
 import type { SpotRowToolBag } from '../../../components/FloorMap/useSpotRowTool'
 import { Eyebrow } from '../../../components/ui'
 import { btn, field } from '../../../components/styles'
-import type { VehicleType } from '../../../types'
-import { VEHICLE_TYPES } from './constants'
 import { microLabel, presetChip } from './styles'
 
 export function SpotRowPanel({
   tool,
   onDone,
+  onEditSetup,
 }: {
   tool: SpotRowToolBag
   onDone: () => void
+  onEditSetup: () => void
 }) {
   const { params, placements, clash } = tool
   const sinPhi = Math.max(Math.sin((params.angleDeg * Math.PI) / 180), 1e-3)
@@ -30,129 +27,85 @@ export function SpotRowPanel({
       {tool.phase === 'idle' && (
         <p className="mb-3 text-xs leading-relaxed text-slate-500">
           Click the two ends of the row along the aisle on the plan - the bays are created as soon as
-          the second click lands. Drag an endpoint afterwards to reposition the row, or tweak the
-          fields below and press Update.
+          the second click lands. Drag an endpoint afterwards to reposition the row.
         </p>
       )}
 
+      <div className="mb-3 flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+        <span>
+          <span className="font-semibold text-slate-900">{params.angleDeg}&deg;</span>{' '}
+          {params.vehicleType.toLowerCase()} · {params.stallWidthM}&times;{params.stallDepthM} m ·{' '}
+          {aisleWidthForAngle(params.angleDeg)} m aisle
+        </span>
+        <button
+          type="button"
+          onClick={onEditSetup}
+          className="shrink-0 font-semibold text-blue-600 hover:text-blue-700"
+        >
+          Change setup
+        </button>
+      </div>
+
       <div className="space-y-3 text-sm text-slate-600">
-        <div>
-          <span className={microLabel}>Parking angle</span>
-          <div className="flex flex-wrap gap-1.5">
-            {ROW_PARK_ANGLES.map((a) => (
-              <button
-                key={a}
-                type="button"
-                onClick={() => tool.setParams({ angleDeg: a })}
-                className={`${presetChip} ${
-                  params.angleDeg === a ? 'border-blue-200 bg-blue-50 text-blue-700' : ''
-                }`}
-              >
-                {a}&deg;
-              </button>
-            ))}
-          </div>
-          <p className="mt-1 text-[11px] text-slate-400">
-            Aisle guidance: {AISLE_WIDTH_BY_ANGLE_M[params.angleDeg]} m (
-            {params.angleDeg === 90 ? 'two-way' : 'one-way'})
-          </p>
-        </div>
+        {tool.phase !== 'idle' && (
+          <>
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={params.autoFill}
+                onChange={(e) => tool.setParams({ autoFill: e.target.checked })}
+              />
+              Fill the baseline to length
+            </label>
 
-        <label className="block">
-          <span className={microLabel}>Vehicle type</span>
-          <select
-            value={params.vehicleType}
-            onChange={(e) => tool.setParams({ vehicleType: e.target.value as VehicleType })}
-            className={`${field} px-2 py-1.5`}
-          >
-            {VEHICLE_TYPES.map((t) => (
-              <option key={t} value={t}>
-                {t}
-              </option>
-            ))}
-          </select>
-        </label>
+            {params.autoFill ? (
+              <p className="text-[11px] text-slate-400">
+                Fits {tool.capacity} {tool.capacity === 1 ? 'bay' : 'bays'} · {tool.leftoverM.toFixed(2)} m
+                left over
+              </p>
+            ) : (
+              <label className="block">
+                <span className={microLabel}>Count</span>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={params.count}
+                  onChange={(e) => tool.setParams({ count: num(e.target.value) })}
+                  className={`${field} px-2 py-1.5`}
+                />
+              </label>
+            )}
 
-        <div className="flex gap-2">
-          <label className="flex-1">
-            <span className={microLabel}>Stall width (m)</span>
-            <input
-              type="number"
-              min="0.5"
-              step="0.1"
-              value={params.stallWidthM}
-              onChange={(e) => tool.setParams({ stallWidthM: num(e.target.value) })}
-              className={`${field} px-2 py-1.5`}
-            />
-          </label>
-          <label className="flex-1">
-            <span className={microLabel}>Stall depth (m)</span>
-            <input
-              type="number"
-              min="0.5"
-              step="0.1"
-              value={params.stallDepthM}
-              onChange={(e) => tool.setParams({ stallDepthM: num(e.target.value) })}
-              className={`${field} px-2 py-1.5`}
-            />
-          </label>
-        </div>
+            <div>
+              <span className={microLabel}>Side of the line</span>
+              <div className="flex flex-wrap gap-1.5">
+                {(['left', 'right'] as const).map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => tool.setParams({ side: s })}
+                    className={`${presetChip} ${
+                      params.side === s ? 'border-blue-200 bg-blue-50 text-blue-700' : ''
+                    }`}
+                  >
+                    {s === 'left' ? 'Left of line' : 'Right of line'}
+                  </button>
+                ))}
+              </div>
+            </div>
 
-        <label className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            checked={params.autoFill}
-            onChange={(e) => tool.setParams({ autoFill: e.target.checked })}
-          />
-          Fill the baseline to length
-        </label>
-
-        {params.autoFill ? (
-          <p className="text-[11px] text-slate-400">
-            Fits {tool.capacity} {tool.capacity === 1 ? 'bay' : 'bays'} · {tool.leftoverM.toFixed(2)} m
-            left over
-          </p>
-        ) : (
-          <label className="block">
-            <span className={microLabel}>Count</span>
-            <input
-              type="number"
-              min="1"
-              step="1"
-              value={params.count}
-              onChange={(e) => tool.setParams({ count: num(e.target.value) })}
-              className={`${field} px-2 py-1.5`}
-            />
-          </label>
-        )}
-
-        <div>
-          <span className={microLabel}>Side of the line</span>
-          <div className="flex flex-wrap gap-1.5">
-            {(['left', 'right'] as const).map((s) => (
-              <button
-                key={s}
-                type="button"
-                onClick={() => tool.setParams({ side: s })}
-                className={`${presetChip} ${
-                  params.side === s ? 'border-blue-200 bg-blue-50 text-blue-700' : ''
-                }`}
-              >
-                {s === 'left' ? 'Left of line' : 'Right of line'}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {params.angleDeg !== 90 && (
-          <label className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              checked={params.flip}
-              onChange={(e) => tool.setParams({ flip: e.target.checked })}
-            />
-            Flip the angle direction
-          </label>
+            {params.angleDeg !== 90 && (
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={params.flip}
+                  onChange={(e) => tool.setParams({ flip: e.target.checked })}
+                />
+                Flip the angle direction
+              </label>
+            )}
+          </>
         )}
 
         <div className="flex gap-2">

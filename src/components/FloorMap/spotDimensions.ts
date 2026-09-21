@@ -58,17 +58,40 @@ export const STALL_PRESETS: StallPreset[] = [
 /** Rotation quick-set values (degrees) for the SpotEditor angle buttons. */
 export const ANGLE_PRESETS_DEG = [0, 45, 60, 90] as const
 
-/** Parking angles the row tool offers (stall long-axis angle to the aisle). */
-export const ROW_PARK_ANGLES = [90, 60, 45] as const
-export type RowParkAngle = (typeof ROW_PARK_ANGLES)[number]
+/** Snap points the row angle dial offers (stall long-axis angle to the aisle). */
+export const ROW_PARK_ANGLE_SNAPS = [30, 45, 60, 75, 90] as const
+export type RowParkAngle = number
+
+/** The dial (and the underlying geometry) only makes sense in this range - below
+ * it the "pitch = width / sin(angle)" formula in geometry.ts blows up into
+ * unusably long stalls; parallel parking is a different layout, not modeled here. */
+export const ROW_ANGLE_MIN_DEG = 30
+export const ROW_ANGLE_MAX_DEG = 90
 
 /**
- * Informational drive-aisle width (meters) for a double-loaded row at each
- * parking angle - shown as a hint in the row panel, not enforced anywhere.
+ * Informational drive-aisle width (meters) for a double-loaded row, at the
+ * angles above - shown as a hint in the row panel, not enforced anywhere.
  * 90 deg two-way already equals LANE_DEFAULT_WIDTH_M (6).
  */
-export const AISLE_WIDTH_BY_ANGLE_M: Record<RowParkAngle, number> = {
-  90: 6.0, // two-way
-  60: 4.5, // one-way
-  45: 3.6, // one-way
+const AISLE_WIDTH_BREAKPOINTS: [number, number][] = [
+  [30, 3.0], // one-way, tight
+  [45, 3.6], // one-way
+  [60, 4.5], // one-way
+  [75, 5.2], // one-way, near two-way
+  [90, 6.0], // two-way
+]
+
+/** Linearly interpolates the aisle-width hint between the breakpoints above,
+ * so the dial's free-form angles still get a sensible (if approximate) guide. */
+export function aisleWidthForAngle(angleDeg: number): number {
+  const a = Math.min(ROW_ANGLE_MAX_DEG, Math.max(ROW_ANGLE_MIN_DEG, angleDeg))
+  for (let i = 0; i < AISLE_WIDTH_BREAKPOINTS.length - 1; i++) {
+    const [a0, w0] = AISLE_WIDTH_BREAKPOINTS[i]
+    const [a1, w1] = AISLE_WIDTH_BREAKPOINTS[i + 1]
+    if (a >= a0 && a <= a1) {
+      const t = (a - a0) / (a1 - a0)
+      return Math.round((w0 + t * (w1 - w0)) * 10) / 10
+    }
+  }
+  return AISLE_WIDTH_BREAKPOINTS[AISLE_WIDTH_BREAKPOINTS.length - 1][1]
 }

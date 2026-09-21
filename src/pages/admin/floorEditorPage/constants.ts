@@ -25,6 +25,6 @@ export const TOOL_HINT: Record<EditorTool, string> = {
   street: 'Click along the road · press Enter to finish · Esc cancels',
   column: 'Click to drop a column',
   entrance: 'Draw the boundary first · then click the two ends of the opening — it snaps onto the wall',
-  spotRow: 'Click the two ends of the row along the aisle, then set it up on the right · Esc cancels',
+  spotRow: 'Click the two ends of the row along the aisle · Esc cancels',
   calibrate: 'Click two points across a distance you know, then enter it on the right',
 }

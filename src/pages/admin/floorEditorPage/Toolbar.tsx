@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import type { EditorTool } from '../../../components/FloorMap/useFloorPlanEditor'
+import type { SpotRowToolBag } from '../../../components/FloorMap/useSpotRowTool'
 import type { UndoStackBag } from '../useUndoStack'
 import { TOOLS, TOOL_HINT } from './constants'
+import { RowSetupPopover } from './RowSetupPopover'
 
 export function ToolStrip({
   tool,
@@ -10,6 +12,9 @@ export function ToolStrip({
   boundaryExists,
   undoStack,
   rowBusy,
+  spotRow,
+  rowSetupOpen,
+  onRowSetupOpenChange,
 }: {
   tool: EditorTool
   onPick: (t: EditorTool) => void
@@ -17,6 +22,9 @@ export function ToolStrip({
   boundaryExists: boolean
   undoStack: UndoStackBag
   rowBusy: boolean
+  spotRow: SpotRowToolBag
+  rowSetupOpen: boolean
+  onRowSetupOpenChange: (open: boolean) => void
 }) {
   const rowBusyHint = 'Saving the parking row…'
   return (
@@ -24,11 +32,14 @@ export function ToolStrip({
       {TOOLS.map(([value, label]) => {
         const active = tool === value
         const disabled = value === 'boundary' && boundaryExists
-        return (
+        const button = (
           <button
             key={value}
             type="button"
-            onClick={() => onPick(value)}
+            onClick={() => {
+              onPick(value)
+              if (value === 'spotRow') onRowSetupOpenChange(true)
+            }}
             disabled={disabled}
             title={disabled ? 'This floor already has a boundary - select it to edit' : undefined}
             className={`rounded-lg border px-2.5 py-1 text-xs font-semibold transition-colors ${
@@ -39,6 +50,15 @@ export function ToolStrip({
           >
             {label}
           </button>
+        )
+        if (value !== 'spotRow') return button
+        return (
+          <div key={value} className="relative">
+            {button}
+            {tool === 'spotRow' && rowSetupOpen && (
+              <RowSetupPopover tool={spotRow} onClose={() => onRowSetupOpenChange(false)} />
+            )}
+          </div>
         )
       })}
       <div className="ml-auto flex items-center gap-1.5">

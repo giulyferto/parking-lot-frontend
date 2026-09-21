@@ -62,12 +62,20 @@ export function ParkingLotDetailPage() {
                   Level {floor.level}
                 </p>
               </div>
-              <Link
-                to={`/admin/floors/${floor.id}`}
-                className="shrink-0 text-sm font-semibold text-blue-600 hover:text-blue-700"
-              >
-                Edit layout & rates →
-              </Link>
+              <div className="flex shrink-0 items-center gap-3">
+                <Link
+                  to={`/admin/floors/${floor.id}/rates`}
+                  className="text-sm font-medium text-blue-600 hover:text-blue-700"
+                >
+                  Rate plans
+                </Link>
+                <Link
+                  to={`/admin/floors/${floor.id}`}
+                  className="text-sm font-semibold text-blue-600 hover:text-blue-700"
+                >
+                  Edit layout →
+                </Link>
+              </div>
             </li>
           ))}
           {floors.length === 0 && (
