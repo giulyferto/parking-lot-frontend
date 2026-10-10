@@ -1,6 +1,7 @@
 import * as d3 from 'd3'
 import type { MutableRefObject } from 'react'
-import type { Spot } from '../../../types'
+import type { FloorElement, Spot } from '../../../types'
+import { elementsInBox } from '../floorElements'
 import { RUBBER_BAND_STROKE, ZOOM_SCALE_EXTENT } from '../floorElementStyles'
 import { bboxesIntersect, bboxOfSpot, distance, type Bbox, type Point } from '../geometry'
 import type { FloorPlanEditorBag } from '../useFloorPlanEditor'
@@ -10,12 +11,13 @@ import type { ViewBox } from './types'
 export interface HitLayerCtx {
   vb: ViewBox
   spots: Spot[]
+  elements: FloorElement[]
   pxToMeters: (px: number, k: number) => number
   cursorRef: MutableRefObject<Point | null>
   redrawOverlay: (k: number) => void
   editor?: FloorPlanEditorBag
   spotRowTool?: SpotRowToolBag
-  onMarqueeSelect?: (ids: string[], additive: boolean) => void
+  onMarqueeSelect?: (spotIds: string[], elementIds: string[], additive: boolean) => void
   onCanvasClick?: () => void
 }
 
@@ -27,7 +29,18 @@ export function bindHitLayer(
   svgEl: SVGSVGElement,
   ctx: HitLayerCtx,
 ): void {
-  const { vb, spots, pxToMeters, cursorRef, redrawOverlay, editor, spotRowTool, onMarqueeSelect, onCanvasClick } = ctx
+  const {
+    vb,
+    spots,
+    elements,
+    pxToMeters,
+    cursorRef,
+    redrawOverlay,
+    editor,
+    spotRowTool,
+    onMarqueeSelect,
+    onCanvasClick,
+  } = ctx
 
   const hitPad = (Math.max(vb.w, vb.h) * 3) / ZOOM_SCALE_EXTENT[0]
   hit
@@ -123,8 +136,9 @@ export function bindHitLayer(
           maxX: Math.max(start[0], event.x),
           maxY: Math.max(start[1], event.y),
         }
-        const ids = spots.filter((s) => bboxesIntersect(bboxOfSpot(s), box)).map((s) => s.id)
-        onMarqueeSelect(ids, additive)
+        const spotIds = spots.filter((s) => bboxesIntersect(bboxOfSpot(s), box)).map((s) => s.id)
+        const elementIds = elementsInBox(elements, box).map((e) => e.id)
+        onMarqueeSelect(spotIds, elementIds, additive)
       })
     hit.on('mousedown', null).on('click', null).call(marqueeDrag)
   } else {

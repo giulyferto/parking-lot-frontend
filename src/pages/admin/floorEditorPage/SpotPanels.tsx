@@ -2,11 +2,12 @@ import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { createSpot, deleteSpot, updateSpotLayout, updateSpotStatus } from '../../../api/spots'
 import type { SpotInput, SpotLayoutInput } from '../../../api/spots'
+import { ELEMENT_LABELS } from '../../../components/FloorMap/floorElementStyles'
 import { SPOT_COLORS } from '../../../components/FloorMap/spotColors'
 import { ANGLE_PRESETS_DEG, STALL_PRESETS } from '../../../components/FloorMap/spotDimensions'
 import { Eyebrow } from '../../../components/ui'
 import { btn, field } from '../../../components/styles'
-import type { Spot, SpotStatus, VehicleType } from '../../../types'
+import type { FloorElement, FloorElementKind, Spot, SpotStatus, VehicleType } from '../../../types'
 import type { UndoCommand } from '../useUndoStack'
 import { VEHICLE_TYPES } from './constants'
 import { microLabel, presetChip } from './styles'
@@ -57,64 +58,89 @@ export function AddSpotForm({ onCreate }: { onCreate: (input: SpotInput) => Prom
   )
 }
 
-export function MultiSpotPanel({
+export function SelectionPanel({
   spots,
+  elements,
   onClose,
   onSetStatus,
   onDelete,
 }: {
   spots: Spot[]
+  elements: FloorElement[]
   onClose: () => void
   onSetStatus: (status: SpotStatus) => void
   onDelete: () => void
 }) {
   const anyOccupied = spots.some((s) => s.status === 'OCCUPIED')
+  const total = spots.length + elements.length
+  const kindCounts = new Map<FloorElementKind, number>()
+  for (const e of elements) kindCounts.set(e.kind, (kindCounts.get(e.kind) ?? 0) + 1)
+  const title = [
+    spots.length > 0 && `${spots.length} ${spots.length === 1 ? 'bay' : 'bays'}`,
+    elements.length > 0 && `${elements.length} ${elements.length === 1 ? 'element' : 'elements'}`,
+  ]
+    .filter(Boolean)
+    .join(' + ')
+
   return (
     <div>
       <div className="mb-3 flex items-center justify-between">
         <h2 className="font-display text-sm font-semibold tracking-tight text-slate-900">
-          {spots.length} bays selected
+          {title} selected
         </h2>
         <button onClick={onClose} className="text-xs font-medium text-slate-400 hover:text-slate-600">
           Close
         </button>
       </div>
 
-      <p className="mb-3 font-mono text-xs text-slate-500">
-        {spots.map((s) => s.code).join(', ')}
-      </p>
+      {spots.length > 0 && (
+        <p className="mb-3 font-mono text-xs text-slate-500">
+          {spots.map((s) => s.code).join(', ')}
+        </p>
+      )}
+      {elements.length > 0 && (
+        <p className="mb-3 font-mono text-xs text-slate-500">
+          {[...kindCounts].map(([kind, n]) => `${n} × ${ELEMENT_LABELS[kind]}`).join(', ')}
+        </p>
+      )}
 
-      <div className="mb-4">
-        <label className="mb-1.5 block font-mono text-[10px] uppercase tracking-[0.14em] text-slate-400">
-          Status
-        </label>
-        <div className="flex flex-wrap gap-2">
-          {(['AVAILABLE', 'DISABLED', 'MAINTENANCE'] as SpotStatus[]).map((s) => (
-            <button
-              key={s}
-              onClick={() => onSetStatus(s)}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50"
-            >
-              <span
-                className="inline-block h-2.5 w-3.5 rounded-[2px] ring-1 ring-inset ring-white/70"
-                style={{ backgroundColor: SPOT_COLORS[s] }}
-              />
-              {s.charAt(0) + s.slice(1).toLowerCase()}
-            </button>
-          ))}
+      {spots.length > 0 && (
+        <div className="mb-4">
+          <label className="mb-1.5 block font-mono text-[10px] uppercase tracking-[0.14em] text-slate-400">
+            Bay status
+          </label>
+          <div className="flex flex-wrap gap-2">
+            {(['AVAILABLE', 'DISABLED', 'MAINTENANCE'] as SpotStatus[]).map((s) => (
+              <button
+                key={s}
+                onClick={() => onSetStatus(s)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50"
+              >
+                <span
+                  className="inline-block h-2.5 w-3.5 rounded-[2px] ring-1 ring-inset ring-white/70"
+                  style={{ backgroundColor: SPOT_COLORS[s] }}
+                />
+                {s.charAt(0) + s.slice(1).toLowerCase()}
+              </button>
+            ))}
+          </div>
+          {anyOccupied && (
+            <p className="mt-1.5 text-[11px] leading-snug text-slate-500">
+              Occupied bays in the selection are skipped - use the map's check-out flow for those.
+            </p>
+          )}
         </div>
-        {anyOccupied && (
-          <p className="mt-1.5 text-[11px] leading-snug text-slate-500">
-            Occupied bays in the selection are skipped - use the map's check-out flow for those.
-          </p>
-        )}
-      </div>
+      )}
+
+      <p className="mb-3 text-[11px] leading-snug text-slate-400">
+        Drag any selected item to move them all together.
+      </p>
 
       <button
         onClick={onDelete}
         className="text-xs font-semibold text-red-600 hover:text-red-700"
       >
-        Delete {spots.length} bays
+        Delete {total} {total === 1 ? 'item' : 'items'}
       </button>
     </div>
   )

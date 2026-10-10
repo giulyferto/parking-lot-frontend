@@ -1,6 +1,13 @@
 import * as d3 from 'd3'
 import type { FloorElement, Geometry } from '../../types'
-import { distance, formatMeters, polygonCentroid, type Point } from './geometry'
+import {
+  bboxesIntersect,
+  distance,
+  formatMeters,
+  polygonCentroid,
+  type Bbox,
+  type Point,
+} from './geometry'
 import {
   BOUNDARY_WALL_THICKNESS_M,
   COLUMN_DEFAULT_RADIUS_M,
@@ -16,6 +23,8 @@ export interface RenderContext {
   /** CSS px per meter at the current viewBox + zoom - for text sizing. */
   effectivePxPerMeter: number
   selectedId?: string | null
+  /** Elements in the marquee / shift-click multi-selection - highlighted, no edit handles. */
+  selectedIds?: ReadonlySet<string>
   interactive: boolean
   /** The floor's BOUNDARY, if drawn - an ENTRANCE rectangle hugs its wall band. */
   boundary?: FloorElement | null
@@ -52,7 +61,7 @@ export function renderElement(
     const colors = ELEMENT_COLORS[el.kind]
     const strokeWidth = el.style?.strokeWidth ?? ELEMENT_STROKE_WIDTH[el.kind]
     const dash = el.style?.strokeDasharray ?? ELEMENT_DASH[el.kind] ?? null
-    const selected = ctx.selectedId === el.id
+    const selected = ctx.selectedId === el.id || !!ctx.selectedIds?.has(el.id)
     const stroke = selected ? EDIT_HANDLE_FILL : el.style?.stroke ?? colors.stroke
     const fill = el.style?.fill ?? colors.fill
     const opacity = el.style?.opacity ?? 1
@@ -308,4 +317,55 @@ export function elementHitTest(
     }
   }
   return null
+}
+
+function cross(o: Point, a: Point, b: Point): number {
+  return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+}
+
+function segmentsIntersect(a: Point, b: Point, c: Point, d: Point): boolean {
+  const d1 = cross(c, d, a)
+  const d2 = cross(c, d, b)
+  const d3 = cross(a, b, c)
+  const d4 = cross(a, b, d)
+  return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))
+}
+
+function pathTouchesBox(coords: Point[], box: Bbox): boolean {
+  const inBox = ([x, y]: Point) => x >= box.minX && x <= box.maxX && y >= box.minY && y <= box.maxY
+  if (coords.some(inBox)) return true
+  const corners: Point[] = [
+    [box.minX, box.minY],
+    [box.maxX, box.minY],
+    [box.maxX, box.maxY],
+    [box.minX, box.maxY],
+  ]
+  for (let i = 1; i < coords.length; i++) {
+    for (let j = 0; j < 4; j++) {
+      if (segmentsIntersect(coords[i - 1], coords[i], corners[j], corners[(j + 1) % 4])) return true
+    }
+  }
+  return false
+}
+
+/**
+ * Elements a marquee `box` touches, by real geometry rather than bbox - a long
+ * diagonal wall's bbox covers half the floor. BOUNDARY is never included: it
+ * encloses everything, so any marquee inside the lot would pick it up.
+ */
+export function elementsInBox(elements: FloorElement[], box: Bbox): FloorElement[] {
+  return elements.filter((el) => {
+    if (el.kind === 'BOUNDARY') return false
+    const g = el.geometry
+    if (g.type === 'Point') {
+      const r = el.style?.radiusM ?? COLUMN_DEFAULT_RADIUS_M
+      const [x, y] = g.coordinates
+      return bboxesIntersect({ minX: x - r, minY: y - r, maxX: x + r, maxY: y + r }, box)
+    }
+    if (g.type === 'LineString') return pathTouchesBox(g.coordinates, box)
+    return (
+      pathTouchesBox([...g.coordinates, g.coordinates[0]], box) ||
+      pointInRing([box.minX, box.minY], g.coordinates)
+    )
+  })
 }

@@ -167,9 +167,12 @@ exactly - keep the two in sync if either changes.
 ## Known simplifications / likely next steps
 
 - The admin layout editor supports drag-to-reposition plus numeric
-  width/height/rotation fields, but not interactive resize handles or
-  multi-select - fine for placing a few dozen spots by hand, worth
-  revisiting if lots get large.
+  width/height/rotation fields, but not interactive resize handles.
+  Multi-select (marquee / shift-click) spans spots and plan elements except
+  the BOUNDARY; dragging any member moves the whole selection
+  (`floorMap/selection.ts`), and group move/delete are one undo entry each
+  (`useSelectionActions`). The editor's single `selectedElementId` (vertex
+  handles + style panel) is separate from that multi-selection.
 - The plan editor persists on every commit / drag-end with a full `reload()`,
   matching the spot editor. Spot drags and element updates are applied to
   local state first (optimistic) - otherwise any re-render before the reload

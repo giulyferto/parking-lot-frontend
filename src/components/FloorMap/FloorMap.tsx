@@ -9,6 +9,7 @@ import { drawChrome } from './floorMap/chrome'
 import { drawOverlay } from './floorMap/overlay'
 import { renderElementsLayer } from './floorMap/elementsLayer'
 import { bindHitLayer } from './floorMap/hitLayer'
+import { createSelectionDrag } from './floorMap/selection'
 import { renderSpotsLayer } from './floorMap/spotsLayer'
 import type { ViewBox } from './floorMap/types'
 
@@ -20,14 +21,17 @@ interface FloorMapProps {
   spots: Spot[]
   elements?: FloorElement[]
   selectedSpotIds?: ReadonlySet<string>
+  selectedElementIds?: ReadonlySet<string>
   showScaleBar?: boolean
   showGrid?: boolean
   gridStepM?: number
   fitToken?: number
   onSpotClick?: (spot: Spot, event: MouseEvent) => void
   onSpotDragEnd?: (spot: Spot, posX: number, posY: number) => void
-  onSpotGroupDragEnd?: (moves: Array<{ spot: Spot; posX: number; posY: number }>) => void
-  onMarqueeSelect?: (ids: string[], additive: boolean) => void
+  onElementClick?: (element: FloorElement, event: MouseEvent) => void
+  /** Drag-end of a multi-selection (spots and/or elements), as one shared offset in meters. */
+  onSelectionDragEnd?: (dx: number, dy: number) => void
+  onMarqueeSelect?: (spotIds: string[], elementIds: string[], additive: boolean) => void
   onCanvasClick?: () => void
   editor?: FloorPlanEditorBag
   spotRowTool?: SpotRowToolBag
@@ -38,13 +42,15 @@ export function FloorMap({
   spots,
   elements,
   selectedSpotIds,
+  selectedElementIds,
   showScaleBar,
   showGrid,
   gridStepM,
   fitToken,
   onSpotClick,
   onSpotDragEnd,
-  onSpotGroupDragEnd,
+  onElementClick,
+  onSelectionDragEnd,
   onMarqueeSelect,
   onCanvasClick,
   editor,
@@ -164,16 +170,21 @@ export function FloorMap({
       .attr('height', vb.h + gpad * 2)
       .attr('display', showGrid ? null : 'none')
 
+    const selection = createSelectionDrag(viewport, selectedSpotIds, selectedElementIds, onSelectionDragEnd)
+
     renderElementsLayer(viewport, dragContainer, els, {
       effectivePxPerMeter: viewToPx * k0,
       editor,
       boundary,
+      selection,
+      onElementClick,
     })
 
     const hit = viewport.select<SVGRectElement>('rect.hit')
     bindHitLayer(hit, overlay, dragContainer, viewportNode, svgEl, {
       vb,
       spots,
+      elements: els,
       pxToMeters,
       cursorRef,
       redrawOverlay,
@@ -184,12 +195,11 @@ export function FloorMap({
     })
 
     renderSpotsLayer(viewport, dragContainer, spots, {
-      selectedSpotIds,
+      selection,
       selectMode,
       labelFont: 11 / (viewToPx * k0),
       onSpotClick,
       onSpotDragEnd,
-      onSpotGroupDragEnd,
     })
 
     redrawChrome(k0)
@@ -198,13 +208,15 @@ export function FloorMap({
     spots,
     elements,
     selectedSpotIds,
+    selectedElementIds,
     showScaleBar,
     showGrid,
     gridStepM,
     fitToken,
     onSpotClick,
     onSpotDragEnd,
-    onSpotGroupDragEnd,
+    onElementClick,
+    onSelectionDragEnd,
     onMarqueeSelect,
     onCanvasClick,
     editor,

@@ -1,17 +1,17 @@
 import * as d3 from 'd3'
 import type { Spot } from '../../../types'
 import { SPOT_COLORS, SPOT_LABEL_COLOR, SPOT_SELECTED_STROKE, SPOT_STROKE } from '../spotColors'
+import type { SelectionDrag } from './selection'
 
 export interface SpotsLayerCtx {
-  selectedSpotIds?: ReadonlySet<string>
+  selection: SelectionDrag
   selectMode: boolean
   labelFont: number
   onSpotClick?: (spot: Spot, event: MouseEvent) => void
   onSpotDragEnd?: (spot: Spot, posX: number, posY: number) => void
-  onSpotGroupDragEnd?: (moves: Array<{ spot: Spot; posX: number; posY: number }>) => void
 }
 
-type DragNode = SVGGElement & { __groupIds?: ReadonlySet<string> | null; __moved?: boolean }
+type DragNode = SVGGElement & { __grouped?: boolean; __moved?: boolean }
 
 export function renderSpotsLayer(
   viewport: d3.Selection<SVGGElement, unknown, null, undefined>,
@@ -19,7 +19,8 @@ export function renderSpotsLayer(
   spots: Spot[],
   ctx: SpotsLayerCtx,
 ): void {
-  const { selectedSpotIds, selectMode, labelFont, onSpotClick, onSpotDragEnd, onSpotGroupDragEnd } = ctx
+  const { selection, selectMode, labelFont, onSpotClick, onSpotDragEnd } = ctx
+  const selectedSpotIds = selection.spotIds
 
   const groups = viewport
     .select<SVGGElement>('g.spots')
@@ -69,45 +70,31 @@ export function renderSpotsLayer(
       event.sourceEvent.stopPropagation()
       const node = this as DragNode
       node.__moved = false
-      const grouped = !!selectedSpotIds && selectedSpotIds.size > 1 && selectedSpotIds.has(d.id)
-      node.__groupIds = grouped ? selectedSpotIds! : null
+      node.__grouped = selection.isGroupMember(d.id)
     })
     .on('drag', function (event, d) {
       const node = this as DragNode
       if (!node.__moved) {
         node.__moved = true
-        const nodes = node.__groupIds ? merged.filter((s) => node.__groupIds!.has(s.id)) : d3.select(this)
-        nodes.raise().classed('is-dragging', true)
+        if (node.__grouped) selection.setDragging(true)
+        else d3.select(this).raise().classed('is-dragging', true)
       }
-      const dx = event.x - d.posX
-      const dy = event.y - d.posY
-      if (node.__groupIds) {
-        merged
-          .filter((s) => node.__groupIds!.has(s.id))
-          .attr('transform', (s) => `translate(${s.posX + dx}, ${s.posY + dy}) rotate(${s.rotation})`)
+      if (node.__grouped) {
+        selection.preview(event.x - d.posX, event.y - d.posY)
       } else {
         d3.select(this).attr('transform', `translate(${event.x}, ${event.y}) rotate(${d.rotation})`)
       }
     })
     .on('end', function (event, d) {
       const node = this as DragNode
-      const groupIds = node.__groupIds
+      const grouped = node.__grouped
       const moved = node.__moved
-      node.__groupIds = null
+      node.__grouped = false
       node.__moved = false
       if (!moved) return
-      if (groupIds) {
-        const dx = event.x - d.posX
-        const dy = event.y - d.posY
-        merged.filter((s) => groupIds.has(s.id)).classed('is-dragging', false)
-        const moves = spots
-          .filter((s) => groupIds.has(s.id))
-          .map((s) => ({
-            spot: s,
-            posX: s.id === d.id ? event.x : s.posX + dx,
-            posY: s.id === d.id ? event.y : s.posY + dy,
-          }))
-        onSpotGroupDragEnd?.(moves)
+      if (grouped) {
+        selection.setDragging(false)
+        selection.commit?.(event.x - d.posX, event.y - d.posY)
       } else {
         d3.select(this).classed('is-dragging', false)
         onSpotDragEnd?.(d, event.x, event.y)
@@ -134,8 +121,8 @@ export function renderSpotsLayer(
     .attr('height', (d) => d.height)
     .attr('fill', (d) => SPOT_COLORS[d.status])
     .attr('fill-opacity', (d) => (d.status === 'DISABLED' ? 0.55 : 0.9))
-    .attr('stroke', (d) => (selectedSpotIds?.has(d.id) ? SPOT_SELECTED_STROKE : 'rgba(15,23,42,0.12)'))
-    .attr('stroke-width', (d) => (selectedSpotIds?.has(d.id) ? 2.5 : 1))
+    .attr('stroke', (d) => (selectedSpotIds.has(d.id) ? SPOT_SELECTED_STROKE : 'rgba(15,23,42,0.12)'))
+    .attr('stroke-width', (d) => (selectedSpotIds.has(d.id) ? 2.5 : 1))
 
   merged
     .select<SVGRectElement>('rect.spot-paint')

@@ -57,69 +57,6 @@ export function useSpotActions({
     [reload, setSpots, undoStack],
   )
 
-  const handleGroupDragEnd = useCallback(
-    async (moves: Array<{ spot: Spot; posX: number; posY: number }>) => {
-      const befores = moves.map(({ spot }) => ({
-        posX: spot.posX,
-        posY: spot.posY,
-        width: spot.width,
-        height: spot.height,
-        rotation: spot.rotation,
-      }))
-      const afters = moves.map(({ posX, posY }, i) => ({ ...befores[i], posX, posY }))
-      const moved = new Map(moves.map(({ spot, posX, posY }) => [spot.id, { posX, posY }]))
-      setSpots((prev) => prev.map((s) => (moved.has(s.id) ? { ...s, ...moved.get(s.id) } : s)))
-      try {
-        await Promise.all(moves.map(({ spot }, i) => updateSpotLayout(spot.id, afters[i])))
-      } catch {
-        reload()
-        return
-      }
-      undoStack.push({
-        undo: async () => {
-          await Promise.all(moves.map(({ spot }, i) => updateSpotLayout(spot.id, befores[i])))
-          reload()
-        },
-        redo: async () => {
-          await Promise.all(moves.map(({ spot }, i) => updateSpotLayout(spot.id, afters[i])))
-          reload()
-        },
-      })
-      reload()
-    },
-    [reload, setSpots, undoStack],
-  )
-
-  const handleDeleteMany = useCallback(
-    async (targets: Spot[]) => {
-      if (!floorId || targets.length === 0) return
-      const snapshots = targets.map((s) => ({
-        code: s.code,
-        vehicleType: s.vehicleType,
-        layout: { posX: s.posX, posY: s.posY, width: s.width, height: s.height, rotation: s.rotation },
-      }))
-      await Promise.all(targets.map((s) => deleteSpot(s.id)))
-      let currentIds: (string | null)[] = targets.map(() => null)
-      undoStack.push({
-        undo: async () => {
-          const created = await Promise.all(
-            snapshots.map((s) => createSpot(floorId, { code: s.code, vehicleType: s.vehicleType })),
-          )
-          currentIds = created.map((c) => c.id)
-          await Promise.all(created.map((c, i) => updateSpotLayout(c.id, snapshots[i].layout)))
-          reload()
-        },
-        redo: async () => {
-          await Promise.all(currentIds.filter((id): id is string => !!id).map((id) => deleteSpot(id)))
-          currentIds = currentIds.map(() => null)
-          reload()
-        },
-      })
-      reload()
-    },
-    [floorId, reload, undoStack],
-  )
-
   const handleSetStatusMany = useCallback(
     async (targets: Spot[], status: SpotStatus) => {
       const eligible = targets.filter((s) => s.status !== 'OCCUPIED')
@@ -238,8 +175,6 @@ export function useSpotActions({
 
   return {
     handleDragEnd,
-    handleGroupDragEnd,
-    handleDeleteMany,
     handleSetStatusMany,
     handleCreateSpot,
     handleCommitRow,
