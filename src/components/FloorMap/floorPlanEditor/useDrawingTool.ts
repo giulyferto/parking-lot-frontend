@@ -117,6 +117,11 @@ export function useDrawingTool(args: UseDrawingToolArgs) {
         setDraft(null)
         return
       }
+      if (tool === 'wall' && vertices.length === 2) {
+        onCreate({ kind: 'WALL', geometry: { type: 'LineString', coordinates: vertices } })
+        setDraft({ mode: 'shape', ...shape, vertices: [pt] })
+        return
+      }
       setDraft({ mode: 'shape', ...shape, vertices })
     },
     [
@@ -134,7 +139,10 @@ export function useDrawingTool(args: UseDrawingToolArgs) {
     ],
   )
 
-  const canvasDblClick = useCallback(() => commitShape(draft), [commitShape, draft])
+  const canvasDblClick = useCallback(() => {
+    if (tool === 'wall') setDraft(null)
+    else commitShape(draft)
+  }, [tool, setDraft, commitShape, draft])
 
   return { snap, snapDraftPoint, canvasClick, canvasDblClick, commitShape }
 }

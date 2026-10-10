@@ -20,7 +20,7 @@ export const TOOLS: Array<[EditorTool, string]> = [
 export const TOOL_HINT: Record<EditorTool, string> = {
   select: '',
   boundary: 'Click each corner · click the first point or press Enter to close · Esc cancels',
-  wall: 'Click along the wall · press Enter to finish · Esc cancels',
+  wall: 'Click both ends of a wall · keep clicking to chain the next one · Esc stops',
   lane: 'Click along the aisle · press Enter to finish · Esc cancels',
   street: 'Click along the road · press Enter to finish · Esc cancels',
   column: 'Click to drop a column',
