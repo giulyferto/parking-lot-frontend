@@ -234,10 +234,15 @@ export function renderElement(
           .style('paint-order', 'stroke')
           .text(el.style?.label ?? 'Label')
       } else {
-        g.append('circle')
-          .attr('cx', x)
-          .attr('cy', y)
-          .attr('r', el.style?.radiusM ?? COLUMN_DEFAULT_RADIUS_M)
+        const r = el.style?.radiusM ?? COLUMN_DEFAULT_RADIUS_M
+        const square = el.style?.shape === 'square'
+        const shape = g.append(square ? 'rect' : 'circle')
+        if (square) {
+          shape.attr('x', x - r).attr('y', y - r).attr('width', r * 2).attr('height', r * 2)
+        } else {
+          shape.attr('cx', x).attr('cy', y).attr('r', r)
+        }
+        shape
           .attr('fill', fill === 'none' ? colors.fill : fill)
           .attr('fill-opacity', opacity)
           .attr('stroke', stroke)
@@ -296,7 +301,10 @@ export function elementHitTest(
       if (distToPolyline(world, g.coordinates) <= tol) return el
     } else {
       const r = Math.max(tolM, (el.style?.radiusM ?? COLUMN_DEFAULT_RADIUS_M) + tolM)
-      if (Math.hypot(world[0] - g.coordinates[0], world[1] - g.coordinates[1]) <= r) return el
+      const dx = world[0] - g.coordinates[0]
+      const dy = world[1] - g.coordinates[1]
+      const d = el.style?.shape === 'square' ? Math.max(Math.abs(dx), Math.abs(dy)) : Math.hypot(dx, dy)
+      if (d <= r) return el
     }
   }
   return null

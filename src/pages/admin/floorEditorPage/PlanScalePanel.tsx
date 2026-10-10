@@ -1,11 +1,13 @@
 import { useState } from 'react'
-import { ELEMENT_LABELS } from '../../../components/FloorMap/floorElementStyles'
+import { COLUMN_DEFAULT_RADIUS_M, ELEMENT_LABELS } from '../../../components/FloorMap/floorElementStyles'
 import { geometrySummary, minVertices } from '../../../components/FloorMap/geometry'
 import type { FloorPlanEditorBag } from '../../../components/FloorMap/useFloorPlanEditor'
 import { Eyebrow } from '../../../components/ui'
 import { btn, field } from '../../../components/styles'
 import type { FloorElement } from '../../../types'
 import { microLabel } from './styles'
+import { ColumnShapePicker } from './ColumnSetupPopover'
+import { columnSizeLabel } from './constants'
 
 export function PlanScalePanel({
   editor,
@@ -221,19 +223,28 @@ function SelectedElementEditor({
           </label>
         )}
         {element.kind === 'COLUMN' && (
-          <label className="block">
-            <span className={microLabel}>Radius (m)</span>
-            <input
-              type="number"
-              min="0.1"
-              step="0.1"
-              defaultValue={element.style?.radiusM ?? ''}
-              onBlur={(e) =>
-                e.target.value && editor.updateSelectedStyle({ radiusM: Number(e.target.value) })
-              }
-              className={`${field} w-24 px-2 py-1.5`}
-            />
-          </label>
+          <>
+            <div className="w-full">
+              <span className={microLabel}>Shape</span>
+              <ColumnShapePicker
+                value={element.style?.shape ?? 'circle'}
+                onChange={(shape) => editor.updateSelectedStyle({ shape })}
+              />
+            </div>
+            <label className="block">
+              <span className={microLabel}>{columnSizeLabel(element.style?.shape ?? 'circle')}</span>
+              <input
+                type="number"
+                min="0.1"
+                step="0.1"
+                defaultValue={(element.style?.radiusM ?? COLUMN_DEFAULT_RADIUS_M) * 2}
+                onBlur={(e) =>
+                  e.target.value && editor.updateSelectedStyle({ radiusM: Number(e.target.value) / 2 })
+                }
+                className={`${field} w-24 px-2 py-1.5`}
+              />
+            </label>
+          </>
         )}
         {(element.kind === 'LABEL' || element.kind === 'ENTRANCE') && (
           <label className="block">

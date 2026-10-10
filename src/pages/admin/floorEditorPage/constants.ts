@@ -1,7 +1,11 @@
 import type { EditorTool } from '../../../components/FloorMap/useFloorPlanEditor'
-import type { VehicleType } from '../../../types'
+import type { ColumnShape, VehicleType } from '../../../types'
 
 export const VEHICLE_TYPES: VehicleType[] = ['CAR', 'MOTORCYCLE', 'EV', 'HANDICAP']
+
+export function columnSizeLabel(shape: ColumnShape): string {
+  return shape === 'square' ? 'Side (m)' : 'Diameter (m)'
+}
 
 // `select` is not in this strip - it's the floating arrow button pinned to the
 // floor plan itself (see SelectHandle), so the default/idle tool sits on the

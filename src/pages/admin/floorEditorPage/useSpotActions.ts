@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react'
+import { useCallback, useRef, type Dispatch, type SetStateAction } from 'react'
 import { createSpot, deleteSpot, updateSpotLayout, updateSpotStatus } from '../../../api/spots'
 import type { SpotInput, SpotLayoutInput } from '../../../api/spots'
 import type { SpotRowPlacement } from '../../../components/FloorMap/geometry'
@@ -9,11 +9,13 @@ import type { UndoCommand, UndoStackBag } from '../useUndoStack'
 export function useSpotActions({
   floorId,
   spots,
+  setSpots,
   undoStack,
   reload,
 }: {
   floorId: string | undefined
   spots: Spot[]
+  setSpots: Dispatch<SetStateAction<Spot[]>>
   undoStack: UndoStackBag
   reload: () => void
 }) {
@@ -31,7 +33,15 @@ export function useSpotActions({
         rotation: spot.rotation,
       }
       const after: SpotLayoutInput = { ...before, posX, posY }
-      await updateSpotLayout(spot.id, after)
+      // Optimistic: any re-render before reload() lands (undo push, the click
+      // after the drag) would otherwise redraw the spot at its old position.
+      setSpots((prev) => prev.map((s) => (s.id === spot.id ? { ...s, posX, posY } : s)))
+      try {
+        await updateSpotLayout(spot.id, after)
+      } catch {
+        reload()
+        return
+      }
       undoStack.push({
         undo: async () => {
           await updateSpotLayout(spot.id, before)
@@ -44,7 +54,7 @@ export function useSpotActions({
       })
       reload()
     },
-    [reload, undoStack],
+    [reload, setSpots, undoStack],
   )
 
   const handleGroupDragEnd = useCallback(
@@ -57,7 +67,14 @@ export function useSpotActions({
         rotation: spot.rotation,
       }))
       const afters = moves.map(({ posX, posY }, i) => ({ ...befores[i], posX, posY }))
-      await Promise.all(moves.map(({ spot }, i) => updateSpotLayout(spot.id, afters[i])))
+      const moved = new Map(moves.map(({ spot, posX, posY }) => [spot.id, { posX, posY }]))
+      setSpots((prev) => prev.map((s) => (moved.has(s.id) ? { ...s, ...moved.get(s.id) } : s)))
+      try {
+        await Promise.all(moves.map(({ spot }, i) => updateSpotLayout(spot.id, afters[i])))
+      } catch {
+        reload()
+        return
+      }
       undoStack.push({
         undo: async () => {
           await Promise.all(moves.map(({ spot }, i) => updateSpotLayout(spot.id, befores[i])))
@@ -70,7 +87,7 @@ export function useSpotActions({
       })
       reload()
     },
-    [reload, undoStack],
+    [reload, setSpots, undoStack],
   )
 
   const handleDeleteMany = useCallback(

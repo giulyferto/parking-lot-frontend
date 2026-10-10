@@ -1,6 +1,8 @@
 import { useCallback, useMemo, useState } from 'react'
 import { minVertices } from './geometry'
+import { COLUMN_DEFAULT_RADIUS_M } from './floorElementStyles'
 import {
+  type ColumnSetup,
   type DraftState,
   type EditorTool,
   type FloorPlanEditorBag,
@@ -11,7 +13,13 @@ import { useCalibration } from './floorPlanEditor/useCalibration'
 import { useElementEditing } from './floorPlanEditor/useElementEditing'
 import { useKeyboardShortcuts } from './floorPlanEditor/useKeyboardShortcuts'
 
-export type { EditorTool, DraftState, UseFloorPlanEditorOptions, FloorPlanEditorBag } from './floorPlanEditor/types'
+export type {
+  ColumnSetup,
+  EditorTool,
+  DraftState,
+  UseFloorPlanEditorOptions,
+  FloorPlanEditorBag,
+} from './floorPlanEditor/types'
 
 export function useFloorPlanEditor(opts: UseFloorPlanEditorOptions): FloorPlanEditorBag {
   const { elements, gridStepM, snapEnabled, onCreate, onUpdate, onDelete, onRescale } = opts
@@ -19,6 +27,14 @@ export function useFloorPlanEditor(opts: UseFloorPlanEditorOptions): FloorPlanEd
   const [tool, setToolState] = useState<EditorTool>('select')
   const [draft, setDraft] = useState<DraftState | null>(null)
   const [selectedElementId, setSelectedElementId] = useState<string | null>(null)
+  const [columnSetup, setColumnSetupState] = useState<ColumnSetup>({
+    shape: 'circle',
+    sizeM: COLUMN_DEFAULT_RADIUS_M * 2,
+  })
+
+  const setColumnSetup = useCallback((patch: Partial<ColumnSetup>) => {
+    setColumnSetupState((prev) => ({ ...prev, ...patch }))
+  }, [])
 
   // The perimeter ring, if one is drawn. An ENTRANCE is an opening *in* this
   // wall, so its points are always projected onto it (draw preview, click,
@@ -48,6 +64,7 @@ export function useFloorPlanEditor(opts: UseFloorPlanEditorOptions): FloorPlanEd
     gridStepM,
     snapEnabled,
     boundaryRing,
+    columnSetup,
     onCreate,
     setSelectedElementId,
   })
@@ -101,6 +118,8 @@ export function useFloorPlanEditor(opts: UseFloorPlanEditorOptions): FloorPlanEd
       selectedElementId,
       selectedElement,
       rulerLengthM,
+      columnSetup,
+      setColumnSetup,
       snapEnabled,
       gridStepM,
       snapDraftPoint,
@@ -124,6 +143,8 @@ export function useFloorPlanEditor(opts: UseFloorPlanEditorOptions): FloorPlanEd
       selectedElementId,
       selectedElement,
       rulerLengthM,
+      columnSetup,
+      setColumnSetup,
       snapEnabled,
       gridStepM,
       snapDraftPoint,

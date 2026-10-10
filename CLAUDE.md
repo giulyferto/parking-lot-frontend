@@ -170,8 +170,10 @@ exactly - keep the two in sync if either changes.
   width/height/rotation fields, but not interactive resize handles or
   multi-select - fine for placing a few dozen spots by hand, worth
   revisiting if lots get large.
-- The plan editor persists on every commit / drag-end with a full `reload()`
-  (no optimistic updates), matching the spot editor. Element style edits are
+- The plan editor persists on every commit / drag-end with a full `reload()`,
+  matching the spot editor. Spot drags and element updates are applied to
+  local state first (optimistic) - otherwise any re-render before the reload
+  lands makes D3 redraw the old position for a frame. A failed save reloads. Element style edits are
   fire-on-blur. Polygon drawing has no mid-draw vertex dragging - finish the
   shape, then drag its vertices in `select` mode. LABEL text on non-LABEL
   kinds is modelled (`style.label`) but not yet rendered.

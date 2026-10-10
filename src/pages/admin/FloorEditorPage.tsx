@@ -31,7 +31,7 @@ export function FloorEditorPage() {
   const [showGrid, setShowGrid] = useState(false)
   const [showScaleBar, setShowScaleBar] = useState(true)
   const [fitToken, setFitToken] = useState(0)
-  const [rowSetupOpen, setRowSetupOpen] = useState(false)
+  const [setupOpen, setSetupOpen] = useState(false)
 
   const reload = useCallback(() => {
     if (!floorId) return
@@ -44,7 +44,7 @@ export function FloorEditorPage() {
 
   const undoStack = useUndoStack({ isBlocked: () => spotActions.spotRowBusyRef.current })
 
-  const spotActions = useSpotActions({ floorId, spots, undoStack, reload })
+  const spotActions = useSpotActions({ floorId, spots, setSpots, undoStack, reload })
   const {
     handleDragEnd,
     handleGroupDragEnd,
@@ -60,6 +60,7 @@ export function FloorEditorPage() {
   const { onCreate, onUpdate, onDelete, onRescale } = useFloorElementActions({
     floorId,
     elements,
+    setElements,
     undoStack,
     reload,
   })
@@ -100,7 +101,7 @@ export function FloorEditorPage() {
     (t: EditorTool) => {
       editor.setTool(t)
       if (t !== 'select') setSelectedSpotIds(new Set())
-      if (t !== 'spotRow') setRowSetupOpen(false)
+      setSetupOpen(false)
     },
     [editor],
   )
@@ -184,8 +185,9 @@ export function FloorEditorPage() {
             undoStack={undoStack}
             rowBusy={spotRow.busy}
             spotRow={spotRow}
-            rowSetupOpen={rowSetupOpen}
-            onRowSetupOpenChange={setRowSetupOpen}
+            editor={editor}
+            setupOpen={setupOpen}
+            onSetupOpenChange={setSetupOpen}
           />
           <div className="deck-grid relative h-full min-h-[24rem] w-full overflow-hidden rounded-xl border border-slate-200 md:min-h-0">
             {spots.length === 0 && elements.length === 0 && editor.tool === 'select' ? (
@@ -248,7 +250,7 @@ export function FloorEditorPage() {
               <SpotRowPanel
                 tool={spotRow}
                 onDone={() => setTool('select')}
-                onEditSetup={() => setRowSetupOpen(true)}
+                onEditSetup={() => setSetupOpen(true)}
               />
               <hr className="border-slate-100" />
             </>

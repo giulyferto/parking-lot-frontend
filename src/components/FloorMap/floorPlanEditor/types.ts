@@ -1,4 +1,4 @@
-import type { FloorElement, FloorElementKind, FloorElementStyle } from '../../../types'
+import type { ColumnShape, FloorElement, FloorElementKind, FloorElementStyle } from '../../../types'
 import type { FloorElementInput, FloorElementPatch } from '../../../api/floorElements'
 import type { Point } from '../geometry'
 
@@ -31,6 +31,12 @@ export const TOOL_SHAPE: Partial<
  */
 export const LENGTH_SNAP_M = 0.05
 
+/** What the next column dropped by the `column` tool looks like. `sizeM` is diameter / side. */
+export interface ColumnSetup {
+  shape: ColumnShape
+  sizeM: number
+}
+
 export type DraftState =
   | { mode: 'shape'; kind: FloorElementKind; geomType: 'Polygon' | 'LineString'; vertices: Point[] }
   | { mode: 'ruler'; points: [Point, Point] }
@@ -52,6 +58,8 @@ export interface FloorPlanEditorBag {
   selectedElementId: string | null
   selectedElement: FloorElement | null
   rulerLengthM: number | null
+  columnSetup: ColumnSetup
+  setColumnSetup: (patch: Partial<ColumnSetup>) => void
   snapEnabled: boolean
   gridStepM: number
   /**

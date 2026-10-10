@@ -3,7 +3,14 @@ import type { FloorElement, Geometry } from '../../../types'
 import type { FloorElementInput } from '../../../api/floorElements'
 import { closestPointOnPath, distance, snapToGrid, type Point } from '../geometry'
 import { elementHitTest } from '../floorElements'
-import { TOOL_SHAPE, LENGTH_SNAP_M, type DraftState, type EditorTool } from './types'
+import { COLUMN_DEFAULT_RADIUS_M } from '../floorElementStyles'
+import {
+  TOOL_SHAPE,
+  LENGTH_SNAP_M,
+  type ColumnSetup,
+  type DraftState,
+  type EditorTool,
+} from './types'
 
 export interface UseDrawingToolArgs {
   tool: EditorTool
@@ -14,6 +21,7 @@ export interface UseDrawingToolArgs {
   gridStepM: number
   snapEnabled: boolean
   boundaryRing: Point[] | null
+  columnSetup: ColumnSetup
   onCreate: (input: FloorElementInput) => void
   setSelectedElementId: Dispatch<SetStateAction<string | null>>
 }
@@ -28,6 +36,7 @@ export function useDrawingTool(args: UseDrawingToolArgs) {
     gridStepM,
     snapEnabled,
     boundaryRing,
+    columnSetup,
     onCreate,
     setSelectedElementId,
   } = args
@@ -83,7 +92,14 @@ export function useDrawingTool(args: UseDrawingToolArgs) {
         return
       }
       if (tool === 'column') {
-        onCreate({ kind: 'COLUMN', geometry: { type: 'Point', coordinates: world } })
+        onCreate({
+          kind: 'COLUMN',
+          geometry: { type: 'Point', coordinates: world },
+          style: {
+            shape: columnSetup.shape,
+            radiusM: columnSetup.sizeM > 0 ? columnSetup.sizeM / 2 : COLUMN_DEFAULT_RADIUS_M,
+          },
+        })
         return
       }
       if (tool === 'calibrate') {
@@ -132,6 +148,7 @@ export function useDrawingTool(args: UseDrawingToolArgs) {
       elements,
       draft,
       boundaryRing,
+      columnSetup,
       onCreate,
       setDraft,
       setSelectedElementId,

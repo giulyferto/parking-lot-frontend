@@ -1,9 +1,12 @@
 import { useState } from 'react'
-import type { EditorTool } from '../../../components/FloorMap/useFloorPlanEditor'
+import type { EditorTool, FloorPlanEditorBag } from '../../../components/FloorMap/useFloorPlanEditor'
 import type { SpotRowToolBag } from '../../../components/FloorMap/useSpotRowTool'
 import type { UndoStackBag } from '../useUndoStack'
 import { TOOLS, TOOL_HINT } from './constants'
+import { ColumnSetupPopover } from './ColumnSetupPopover'
 import { RowSetupPopover } from './RowSetupPopover'
+
+const TOOLS_WITH_SETUP: EditorTool[] = ['spotRow', 'column']
 
 export function ToolStrip({
   tool,
@@ -13,8 +16,9 @@ export function ToolStrip({
   undoStack,
   rowBusy,
   spotRow,
-  rowSetupOpen,
-  onRowSetupOpenChange,
+  editor,
+  setupOpen,
+  onSetupOpenChange,
 }: {
   tool: EditorTool
   onPick: (t: EditorTool) => void
@@ -23,8 +27,9 @@ export function ToolStrip({
   undoStack: UndoStackBag
   rowBusy: boolean
   spotRow: SpotRowToolBag
-  rowSetupOpen: boolean
-  onRowSetupOpenChange: (open: boolean) => void
+  editor: FloorPlanEditorBag
+  setupOpen: boolean
+  onSetupOpenChange: (open: boolean) => void
 }) {
   const rowBusyHint = 'Saving the parking row…'
   return (
@@ -38,7 +43,7 @@ export function ToolStrip({
             type="button"
             onClick={() => {
               onPick(value)
-              if (value === 'spotRow') onRowSetupOpenChange(true)
+              if (TOOLS_WITH_SETUP.includes(value)) onSetupOpenChange(true)
             }}
             disabled={disabled}
             title={disabled ? 'This floor already has a boundary - select it to edit' : undefined}
@@ -51,12 +56,16 @@ export function ToolStrip({
             {label}
           </button>
         )
-        if (value !== 'spotRow') return button
+        if (!TOOLS_WITH_SETUP.includes(value)) return button
+        const onClose = () => onSetupOpenChange(false)
         return (
           <div key={value} className="relative">
             {button}
-            {tool === 'spotRow' && rowSetupOpen && (
-              <RowSetupPopover tool={spotRow} onClose={() => onRowSetupOpenChange(false)} />
+            {active && setupOpen && value === 'spotRow' && (
+              <RowSetupPopover tool={spotRow} onClose={onClose} />
+            )}
+            {active && setupOpen && value === 'column' && (
+              <ColumnSetupPopover editor={editor} onClose={onClose} />
             )}
           </div>
         )

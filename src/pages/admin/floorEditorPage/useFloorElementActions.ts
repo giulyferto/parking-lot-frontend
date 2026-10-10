@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { useCallback, type Dispatch, type SetStateAction } from 'react'
 import { rescaleFloor } from '../../../api/floors'
 import {
   createFloorElement,
@@ -12,11 +12,13 @@ import type { UndoStackBag } from '../useUndoStack'
 export function useFloorElementActions({
   floorId,
   elements,
+  setElements,
   undoStack,
   reload,
 }: {
   floorId: string | undefined
   elements: FloorElement[]
+  setElements: Dispatch<SetStateAction<FloorElement[]>>
   undoStack: UndoStackBag
   reload: () => void
 }) {
@@ -48,7 +50,13 @@ export function useFloorElementActions({
   const onUpdate = useCallback(
     async (id: string, patch: FloorElementPatch) => {
       const before = elements.find((e) => e.id === id)
-      await updateFloorElement(id, patch)
+      setElements((prev) => prev.map((e) => (e.id === id ? { ...e, ...patch } : e)))
+      try {
+        await updateFloorElement(id, patch)
+      } catch {
+        reload()
+        return
+      }
       if (before) {
         const inverse: FloorElementPatch = {}
         if (patch.geometry !== undefined) inverse.geometry = before.geometry
@@ -68,7 +76,7 @@ export function useFloorElementActions({
       }
       reload()
     },
-    [elements, reload, undoStack],
+    [elements, setElements, reload, undoStack],
   )
 
   const onDelete = useCallback(
